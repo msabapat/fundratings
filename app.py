@@ -367,7 +367,7 @@ def fund_info(ticker: str):
             from datetime import date
             incep = str(date.fromtimestamp(incep))
 
-        assets = info.get("totalAssets")
+        assets = info.get("totalAssets") or info.get("netAssets")
         assets_str = None
         if assets:
             if assets >= 1e9:
@@ -386,8 +386,8 @@ def fund_info(ticker: str):
             ytd_return   = info.get("ytdReturn"),
             three_yr     = info.get("threeYearAverageReturn"),
             five_yr      = info.get("fiveYearAverageReturn"),
-            ms_risk      = info.get("morningstarRiskRating"),
-            ms_overall   = info.get("morningstarOverallRating"),
+            ms_risk      = info.get("morningStarRiskRating"),
+            ms_overall   = info.get("morningStarOverallRating"),
         )
         _info_cache[ticker] = result
         return jsonify(result)

@@ -667,7 +667,8 @@ async function loadFundInfo(ticker) {
     document.getElementById('iEr').textContent         = info.er != null ? (info.er*100).toFixed(2)+'%' : '—';
     const stars = info.ms_overall;
     document.getElementById('iMsOverall').textContent  = stars ? '★'.repeat(stars) + '☆'.repeat(Math.max(0,5-stars)) : '—';
-    document.getElementById('iRisk').textContent       = info.ms_risk      || '—';
+    const MS_RISK = {1:'Low',2:'Below Average',3:'Average',4:'Above Average',5:'High'};
+    document.getElementById('iRisk').textContent = info.ms_risk ? (MS_RISK[info.ms_risk] || info.ms_risk) : '—';
     document.getElementById('fundDesc').textContent    = info.description  || 'No description available.';
     return info;
   } catch {
