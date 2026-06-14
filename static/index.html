@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fund Replication Analyzer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+/* ─── Reset ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ─── Base ───────────────────────────────────────────────────────── */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #edf0f7; color: #1e2a3a; min-height: 100vh;
+}
+
+/* ─── Header ─────────────────────────────────────────────────────── */
+header {
+  background: linear-gradient(135deg, #192754 0%, #2a4499 100%);
+  color: #fff; padding: 18px 32px; display: flex; align-items: center; gap: 16px;
+  box-shadow: 0 3px 14px rgba(0,0,0,0.3);
+}
+header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: 0.3px; }
+header p  { font-size: 0.8rem; opacity: 0.65; margin-top: 3px; }
+
+/* ─── Controls ───────────────────────────────────────────────────── */
+.controls {
+  background: #fff; border-bottom: 1px solid #d5dae6;
+  padding: 14px 32px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.controls label { font-size: 0.85rem; font-weight: 600; color: #5a6a7e; }
+#fundSelect {
+  font-size: 0.9rem; padding: 8px 12px; border: 1.5px solid #bec8d8;
+  border-radius: 7px; background: #fff; color: #1e2a3a; min-width: 340px; cursor: pointer;
+  transition: border-color 0.15s;
+}
+#fundSelect:focus { outline: none; border-color: #2f5fd4; }
+.meta-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* ticker row */
+.controls-divider {
+  flex-basis: 100%; height: 0; border-top: 1px solid #e8ecf3; margin: 4px -32px 0;
+}
+#tickerInput {
+  font-size: 0.9rem; padding: 7px 11px; border: 1.5px solid #bec8d8;
+  border-radius: 7px; background: #fff; color: #1e2a3a; width: 130px;
+  text-transform: uppercase; letter-spacing: 0.5px; transition: border-color 0.15s;
+}
+#tickerInput:focus { outline: none; border-color: #2f5fd4; }
+#tickerInput::placeholder { text-transform: none; letter-spacing: 0; color: #b0bccf; }
+#tickerGoBtn {
+  font-size: 0.85rem; font-weight: 600; padding: 7px 18px;
+  border: none; border-radius: 7px; background: #2f5fd4; color: #fff;
+  cursor: pointer; transition: background 0.15s;
+}
+#tickerGoBtn:hover { background: #1d4ed8; }
+#tickerGoBtn:active { background: #1e40af; }
+.ctrl-sep { color: #c8d0de; font-size: 1.2rem; margin: 0 4px; user-select: none; }
+#bmInput {
+  font-size: 0.9rem; padding: 7px 11px; border: 1.5px solid #bec8d8;
+  border-radius: 7px; background: #fff; color: #1e2a3a; width: 110px;
+  text-transform: uppercase; letter-spacing: 0.5px; transition: border-color 0.15s;
+}
+#bmInput:focus { outline: none; border-color: #2f5fd4; }
+#bmInput::placeholder { text-transform: none; letter-spacing: 0; color: #b0bccf; }
+.chip {
+  background: #eef2fb; border: 1px solid #bfcde8; border-radius: 20px;
+  padding: 3px 10px; color: #2044a3; font-size: 0.78rem; font-weight: 500;
+}
+.chip.warn { background: #fff7ed; border-color: #fed7aa; color: #9a3412; }
+.chip.good { background: #f0fdf4; border-color: #86efac; color: #166534; }
+.stars { color: #f59e0b; }
+
+/* ─── Main ───────────────────────────────────────────────────────── */
+main { padding: 24px 32px; max-width: 1520px; margin: 0 auto; }
+
+#placeholder { text-align: center; padding: 80px 20px; color: #8a9ab0; }
+#placeholder svg { display: block; margin: 0 auto 16px; opacity: 0.3; }
+#placeholder p { font-size: 1rem; }
+
+#loading { display: none; text-align: center; padding: 60px 20px; color: #2f5fd4; }
+.spinner {
+  display: inline-block; width: 40px; height: 40px;
+  border: 4px solid #d5dae6; border-top-color: #2f5fd4;
+  border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 14px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#dashboard { display: none; }
+
+/* ─── Section titles ─────────────────────────────────────────────── */
+.section-title {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.2px; color: #7a8ea8; margin: 28px 0 10px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+
+/* ─── Info cards ─────────────────────────────────────────────────── */
+.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 800px) { .info-grid { grid-template-columns: 1fr; } }
+
+.info-card {
+  background: #fff; border-radius: 12px; padding: 18px 22px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07), 0 0 0 1px rgba(0,0,0,0.03);
+}
+.info-card h3 {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.8px; color: #7a8ea8; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid #edf0f7;
+}
+.info-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px solid #f4f6fa; font-size: 0.84rem;
+}
+.info-row:last-child { border-bottom: none; }
+.info-label { color: #7a8ea8; font-size: 0.78rem; }
+.info-val   { font-weight: 600; color: #1e2a3a; }
+#fundDesc {
+  font-size: 0.82rem; line-height: 1.6; color: #4a5a6e;
+  max-height: 120px; overflow-y: auto;
+}
+
+/* ─── Fee banner ─────────────────────────────────────────────────── */
+.fee-banner {
+  background: #fff; border-radius: 12px; padding: 16px 22px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07), 0 0 0 1px rgba(0,0,0,0.03);
+  display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+  border-left: 4px solid #2f5fd4;
+  font-size: 0.84rem; color: #4a5a6e;
+}
+.fee-banner strong { color: #1e2a3a; }
+.fee-item { display: flex; flex-direction: column; gap: 2px; }
+.fee-lbl  { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.6px; color: #7a8ea8; }
+.fee-num  { font-size: 1.1rem; font-weight: 700; }
+.fee-num.pos { color: #0a7a50; }
+.fee-num.neg { color: #b91c1c; }
+.fee-note {
+  font-size: 0.76rem; color: #7a8ea8; border-left: 1px solid #dde3ef;
+  padding-left: 18px; line-height: 1.55; max-width: 430px;
+}
+
+/* ─── Grade card ─────────────────────────────────────────────────── */
+.grade-card {
+  background: #fff; border-radius: 12px; padding: 18px 24px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07), 0 0 0 1px rgba(0,0,0,0.03);
+  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+}
+.grade-circle {
+  width: 80px; height: 80px; border-radius: 50%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: #fff; background: #94a3b8; flex-shrink: 0;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+}
+.grade-letter { font-size: 1.8rem; font-weight: 800; line-height: 1; }
+.grade-score-small { font-size: 0.65rem; opacity: 0.85; margin-top: 2px; letter-spacing: 0.3px; }
+.grade-circle.grade-A { background: linear-gradient(145deg, #10b981, #0a7a50); }
+.grade-circle.grade-B { background: linear-gradient(145deg, #3b82f6, #1d4ed8); }
+.grade-circle.grade-C { background: linear-gradient(145deg, #f59e0b, #b45309); }
+.grade-circle.grade-D { background: linear-gradient(145deg, #ef4444, #b91c1c); }
+.grade-circle.grade-F { background: linear-gradient(145deg, #b91c1c, #7f1d1d); }
+.grade-details { flex: 1; min-width: 220px; }
+.grade-headline { font-size: 1.0rem; font-weight: 700; color: #1e2a3a; margin-bottom: 4px; }
+.grade-score-line { font-size: 0.82rem; color: #7a8ea8; margin-bottom: 6px; }
+.grade-score-line strong { color: #1e2a3a; font-size: 1.0rem; }
+.grade-desc { font-size: 0.83rem; color: #4a5a6e; line-height: 1.5; }
+.grade-method {
+  font-size: 0.72rem; color: #9ab0c8; margin-top: 8px; line-height: 1.4;
+  border-top: 1px solid #f0f3f8; padding-top: 8px;
+}
+
+/* ─── OOS note ───────────────────────────────────────────────────── */
+.oos-note {
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;
+  padding: 10px 16px; font-size: 0.78rem; color: #92400e;
+  margin-bottom: 8px; line-height: 1.55;
+}
+.bm-adj-note {
+  background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px;
+  padding: 8px 16px; font-size: 0.78rem; color: #166534;
+  margin-bottom: 14px; line-height: 1.55;
+}
+
+/* ─── Sub-section labels ─────────────────────────────────────────── */
+.subsect-label {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.8px; color: #7a8ea8; margin: 0 0 7px;
+}
+
+/* ─── Tables ─────────────────────────────────────────────────────── */
+.table-card {
+  background: #fff; border-radius: 12px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07), 0 0 0 1px rgba(0,0,0,0.03);
+  overflow: hidden;
+}
+table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+th {
+  background: #f4f6fc; padding: 9px 14px; text-align: right;
+  font-size: 0.69rem; font-weight: 700; color: #5a6a7e;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 2px solid #e5e9f2;
+}
+th:first-child, th.period-header { text-align: left; }
+th.group-header {
+  text-align: center; border-bottom: 2px solid #e5e9f2;
+  font-size: 0.71rem; font-weight: 800; letter-spacing: 0.6px;
+  padding: 7px 14px; color: #2f5fd4; background: #eef2fb;
+}
+td {
+  padding: 10px 14px; border-bottom: 1px solid #eef0f6;
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+td:first-child { text-align: left; font-weight: 600; color: #3d4f63; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(47,95,212,0.02) !important; }
+
+/* column group shading — data cells */
+td.col-fund { background: rgba(47,  95, 212, 0.042); }
+td.col-rep  { background: rgba(194, 101,  26, 0.038); }
+td.col-spy  { background: rgba( 10, 158, 114, 0.046); }
+td.col-qqq  { background: rgba(124,  58, 237, 0.038); }
+/* header cells (slightly more opaque) */
+th.col-fund { background: rgba(47,  95, 212, 0.09); }
+th.col-rep  { background: rgba(194, 101,  26, 0.08); }
+th.col-spy  { background: rgba( 10, 158, 114, 0.09); }
+th.col-qqq  { background: rgba(124,  58, 237, 0.07); }
+/* group-header override */
+th.group-header.col-fund { background: rgba(47,  95, 212, 0.14); color: #1e3fa0; border-bottom-color: rgba(47,95,212,0.18); }
+th.group-header.col-rep  { background: rgba(194, 101,  26, 0.12); color: #8b360a; border-bottom-color: rgba(194,101,26,0.18); }
+th.group-header.col-spy  { background: rgba( 10, 158, 114, 0.13); color: #065f46; border-bottom-color: rgba(10,158,114,0.18); }
+th.group-header.col-qqq  { background: rgba(124,  58, 237, 0.11); color: #4c1d95; border-bottom-color: rgba(124,58,237,0.16); }
+
+/* value colors */
+.pos { color: #0a7a50; font-weight: 600; }
+.neg { color: #b91c1c; font-weight: 600; }
+.neu { color: #5a6a7e; }
+.fund-val { color: #2f5fd4; font-weight: 600; }
+.rep-val  { color: #c2651a; font-weight: 600; }
+.na  { color: #b0bccf; font-style: italic; }
+
+/* ─── Charts ─────────────────────────────────────────────────────── */
+.charts-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+@media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+
+.chart-card {
+  background: #fff; border-radius: 12px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07), 0 0 0 1px rgba(0,0,0,0.03);
+  padding: 20px 24px;
+}
+.chart-card h3 {
+  font-size: 0.72rem; font-weight: 700; color: #5a6a7e;
+  text-transform: uppercase; letter-spacing: 0.8px;
+  margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid #edf0f7;
+}
+#cumChart     { max-height: 300px; }
+#wgtChart     { max-height: 300px; }
+#rollRetChart { max-height: 300px; }
+#rollWgtChart { max-height: 320px; }
+
+.chart-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid #edf0f7;
+  gap: 8px; flex-wrap: wrap;
+}
+.chart-header-title {
+  font-size: 0.72rem; font-weight: 700; color: #5a6a7e;
+  text-transform: uppercase; letter-spacing: 0.8px;
+}
+.chart-header-note { font-size: 0.68rem; color: #94a3b8; margin-top: 3px; }
+.chart-header select {
+  font-size: 0.8rem; padding: 3px 8px; border: 1px solid #bec8d8;
+  border-radius: 5px; color: #1e2a3a; background: #fff; cursor: pointer;
+}
+
+/* ─── Group separator (Vol → Sharpe divider in risk table) ───────── */
+.group-sep  { border-left: 2px solid #c5ccd8 !important; }
+th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
+
+/* ─── IS toggle ──────────────────────────────────────────────────── */
+.chart-controls { display: flex; gap: 10px; align-items: center; }
+.period-btns { display: flex; border: 1.5px solid #bec8d8; border-radius: 7px; overflow: hidden; }
+.period-btn {
+  font-size: 0.72rem; font-weight: 600; padding: 3px 11px;
+  border: none; border-right: 1px solid #bec8d8;
+  background: #fff; color: #5a6a7e; cursor: pointer;
+  transition: background 0.12s, color 0.12s; white-space: nowrap;
+}
+.period-btn:last-child { border-right: none; }
+.period-btn.active { background: #2f5fd4; color: #fff; }
+.period-btn:hover:not(.active) { background: #eef2fb; color: #2f5fd4; }
+.is-toggle-btn {
+  font-size: 0.73rem; padding: 4px 14px;
+  border: 1.5px solid #0891b2; border-radius: 20px;
+  background: #fff; color: #0891b2; cursor: pointer;
+  font-weight: 600; transition: all 0.15s; white-space: nowrap;
+}
+.is-toggle-btn:hover   { background: #f0f9ff; }
+.is-toggle-btn.active  { background: #0891b2; color: #fff; }
+
+.is-note {
+  display: none; margin-top: 12px;
+  background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px;
+  padding: 10px 16px; font-size: 0.76rem; color: #0c4a6e; line-height: 1.55;
+}
+.is-note.visible { display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Fund Replication Analyzer</h1>
+    <p>Return-Based Style Analysis &nbsp;&bull;&nbsp; Passive ETF replication of active funds</p>
+  </div>
+</header>
+
+<div class="controls">
+  <label for="fundSelect">Select fund</label>
+  <select id="fundSelect"><option value="">— choose a fund —</option></select>
+  <div class="meta-chips" id="metaChips"></div>
+  <div class="controls-divider"></div>
+  <label for="tickerInput">Enter ticker</label>
+  <input type="text" id="tickerInput" placeholder="e.g. FXAIX" maxlength="12" spellcheck="false" autocomplete="off" />
+  <button id="tickerGoBtn">Analyze</button>
+  <span class="ctrl-sep">|</span>
+  <label for="bmInput">Compare vs</label>
+  <input type="text" id="bmInput" placeholder="SPY" maxlength="12" spellcheck="false" autocomplete="off" title="Custom benchmark ticker (blank = SPY)" />
+</div>
+
+<main>
+  <div id="placeholder">
+    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+      <path d="M3 3v18h18M7 16l4-4 4 4 4-8"/>
+    </svg>
+    <p>Select a fund above to run the replication analysis</p>
+  </div>
+
+  <div id="loading">
+    <div class="spinner"></div>
+    <p id="loadMsg">Running analysis&hellip;</p>
+  </div>
+
+  <div id="dashboard">
+
+    <!-- Fund info -->
+    <div class="section-title">Fund Information</div>
+    <div class="info-grid">
+      <div class="info-card">
+        <h3>Profile</h3>
+        <div class="info-row"><span class="info-label">Fund family</span>  <span class="info-val" id="iFundFamily">—</span></div>
+        <div class="info-row"><span class="info-label">Category</span>     <span class="info-val" id="iCategory">—</span></div>
+        <div class="info-row"><span class="info-label">Inception</span>    <span class="info-val" id="iInception">—</span></div>
+        <div class="info-row"><span class="info-label">AUM</span>          <span class="info-val" id="iAum">—</span></div>
+        <div class="info-row"><span class="info-label">Expense ratio</span><span class="info-val" id="iEr">—</span></div>
+        <div class="info-row"><span class="info-label">Morningstar risk</span><span class="info-val" id="iRisk">—</span></div>
+      </div>
+      <div class="info-card">
+        <h3>Fund Objective</h3>
+        <p id="fundDesc">Loading&hellip;</p>
+      </div>
+    </div>
+
+    <!-- Fee banner -->
+    <div class="section-title">Cost &amp; Fee Analysis</div>
+    <div class="fee-banner" id="feeBanner">
+      <div class="fee-item">
+        <span class="fee-lbl">Fund Expense Ratio</span>
+        <span class="fee-num" id="fFundEr">—</span>
+      </div>
+      <div class="fee-item">
+        <span class="fee-lbl">Replica Expense Ratio</span>
+        <span class="fee-num" id="fRepEr">—</span>
+      </div>
+      <div class="fee-item">
+        <span class="fee-lbl">Annual fee saving (replica)</span>
+        <span class="fee-num" id="fSaving">—</span>
+      </div>
+      <p class="fee-note" id="fNote"></p>
+    </div>
+
+    <!-- Fund Grade -->
+    <div class="section-title">Fund Grade</div>
+    <div class="grade-card" id="gradeCard">
+      <div class="grade-circle" id="gradeCircle">
+        <span class="grade-letter" id="gradeLetter">—</span>
+        <span class="grade-score-small" id="gradeScoreSmall">—/5</span>
+      </div>
+      <div class="grade-details">
+        <div class="grade-headline">Active Fund Assessment</div>
+        <div class="grade-score-line">Score: <strong id="gradeScoreMain">—</strong> / 5</div>
+        <div class="grade-desc" id="gradeDesc">—</div>
+        <div class="grade-method">
+          60% weight: risk-adj vs replica &bull; 40% weight: risk-adj vs <span class="js-bm-label">SPY</span>.
+          Period weights: Full 30%, 10yr 25%, 5yr 15%, 3yr 15%, 1yr 15%.
+          3.0&nbsp;/&nbsp;5 = C — fund matches both replica and <span class="js-bm-label">SPY</span> on a risk-adj basis.
+          A (&ge;4.7) &rarr; A&minus; (4.4) &rarr; B+ (4.1) &rarr; B (3.8) &rarr; B&minus; (3.4) &rarr;
+          C+ (3.1) &rarr; C (2.8) &rarr; C&minus; (2.4) &rarr; D+ (2.0) &rarr; D (1.6) &rarr; F (&lt;1.6).
+        </div>
+      </div>
+    </div>
+
+    <!-- Performance tables -->
+    <div class="section-title">Performance vs Replication Portfolio</div>
+    <div class="oos-note" id="oosNote"></div>
+    <div class="bm-adj-note" id="bmAdjNote" style="display:none"></div>
+
+    <div class="subsect-label">Annualized Returns (geometric, OOS)</div>
+    <div class="table-card" style="margin-bottom:18px">
+      <table id="retTable">
+        <thead>
+          <tr>
+            <th class="period-header">Period</th>
+            <th class="col-fund">Fund</th>
+            <th class="col-rep">Replica</th>
+            <th class="col-rep">vs Replica</th>
+            <th class="col-rep">Tracking Error</th>
+            <th class="col-spy js-bm-label">SPY</th>
+            <th class="col-spy js-bm-adj-label">SPY Risk-Adj</th>
+            <th class="col-spy js-vs-bm-adj-label">vs Risk-Adj</th>
+            <th class="col-qqq">QQQ</th>
+            <th class="col-qqq">vs QQQ</th>
+          </tr>
+        </thead>
+        <tbody id="retBody"></tbody>
+      </table>
+    </div>
+
+    <div class="subsect-label">Volatility &amp; Sharpe Ratios (annualized)</div>
+    <div class="table-card">
+      <table id="riskTable">
+        <thead>
+          <tr>
+            <th class="period-header" rowspan="2">Period</th>
+            <th class="group-header" colspan="5">Volatility</th>
+            <th class="group-header sharpe-grp group-sep" colspan="5">Sharpe Ratio</th>
+          </tr>
+          <tr>
+            <th class="col-fund">Fund</th>
+            <th class="col-rep">Replica</th>
+            <th class="col-spy js-bm-label">SPY</th>
+            <th class="col-spy js-bm-adj-label">SPY Risk-Adj</th>
+            <th class="col-qqq">QQQ</th>
+            <th class="col-fund group-sep">Fund</th>
+            <th class="col-rep">Replica</th>
+            <th class="col-spy js-bm-label">SPY</th>
+            <th class="col-spy js-bm-adj-label">SPY Risk-Adj</th>
+            <th class="col-qqq">QQQ</th>
+          </tr>
+        </thead>
+        <tbody id="riskBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Charts row 1 -->
+    <div class="section-title">
+      <span>Charts</span>
+      <div class="chart-controls">
+        <div class="period-btns" id="chartPeriodBtns">
+          <button class="period-btn" data-period="3y" onclick="applyChartPeriod('3y')">3Y</button>
+          <button class="period-btn" data-period="5y" onclick="applyChartPeriod('5y')">5Y</button>
+          <button class="period-btn" data-period="10y" onclick="applyChartPeriod('10y')">10Y</button>
+          <button class="period-btn active" data-period="all" onclick="applyChartPeriod('all')">All</button>
+        </div>
+        <button class="is-toggle-btn" id="isToggleBtn" onclick="toggleIsReplica()">Show IS Replica</button>
+      </div>
+    </div>
+    <div id="isNote" class="is-note">
+      <strong>In-Sample (IS) Replica</strong> (purple dashed) — a single set of ETF weights
+      fitted on <em>all available fund history</em> at once. These weights are NOT truly out-of-sample:
+      the optimization saw the same data it is being evaluated against, so it will appear to
+      track the fund more closely than is realistic going forward.
+      Compare it to the Rolling OOS Replica (orange) to see how much lift comes from refitting
+      vs. a static style snapshot. The IS weights also power the ETF allocation bar chart.
+    </div>
+
+    <div class="charts-grid">
+      <div class="chart-card">
+        <h3>Cumulative Return &mdash; Fund vs Replica (Out-of-Sample)</h3>
+        <canvas id="cumChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Style Weights &mdash; Full In-Sample Fit</h3>
+        <canvas id="wgtChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Charts row 2 -->
+    <div class="section-title">Rolling Analysis</div>
+    <div class="charts-grid" style="grid-template-columns:3fr 2fr">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-header-title">Trailing Return &mdash; Fund vs Replica</div>
+            <div class="chart-header-note">Select window below</div>
+          </div>
+          <select id="rollWindow">
+            <option value="3">3-month trailing</option>
+            <option value="6">6-month trailing</option>
+            <option value="12" selected>12-month trailing</option>
+            <option value="24">24-month trailing</option>
+          </select>
+        </div>
+        <canvas id="rollRetChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>ETF Weights Over Time (Rolling Rebalance)</h3>
+        <canvas id="rollWgtChart"></canvas>
+      </div>
+    </div>
+
+  </div><!-- /dashboard -->
+</main>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+let cumChartInst = null, wgtChartInst = null;
+let rollRetChartInst = null, rollWgtChartInst = null;
+let _monthlyOOS   = null;
+let _cumData      = null;
+let _showIsReplica = false;
+let _bmLabel = 'SPY';
+
+function _applyBmLabel(label, bm_w) {
+  _bmLabel = label || 'SPY';
+  const adjLabel = _bmLabel + ' Risk-Adj';
+  document.querySelectorAll('.js-bm-label').forEach(el => el.textContent = _bmLabel);
+  document.querySelectorAll('.js-vs-bm-label').forEach(el => el.textContent = 'vs ' + _bmLabel);
+  document.querySelectorAll('.js-bm-adj-label').forEach(el => el.textContent = adjLabel);
+  document.querySelectorAll('.js-vs-bm-adj-label').forEach(el => el.textContent = 'vs Risk-Adj');
+
+  const note = document.getElementById('bmAdjNote');
+  if (bm_w != null) {
+    const pct   = (bm_w * 100).toFixed(0);
+    const rem   = ((1 - bm_w) * 100).toFixed(0);
+    const sign  = bm_w <= 1 ? '+' : '−';
+    note.innerHTML = `<strong>Risk-Adj column:</strong> ${_bmLabel} scaled to fund volatility — `
+      + `<strong>${pct}% ${_bmLabel} ${sign} ${Math.abs(100 - +pct)}% T-bill</strong> `
+      + `(w&nbsp;=&nbsp;σ<sub>fund</sub>&nbsp;/&nbsp;σ<sub>${_bmLabel}</sub>&nbsp;=&nbsp;${bm_w.toFixed(3)}). `
+      + `Sharpe of risk-adj ${_bmLabel} ≈ Sharpe of raw ${_bmLabel} (scale-invariant).`;
+    note.style.display = '';
+  } else {
+    note.style.display = 'none';
+  }
+}
+
+let _chartPeriod = 'all';
+
+function applyChartPeriod(period) {
+  _chartPeriod = period;
+  document.querySelectorAll('.period-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.period === period);
+  });
+
+  // Cumulative chart: rebuild with rebased data so it always starts at 1.0
+  if (_cumData) buildCumChart(_cumData, period);
+
+  // Rolling charts: just zoom the X axis (no rebasing needed for periodic returns)
+  let minDate;
+  if (period !== 'all' && _cumData && _cumData.dates.length) {
+    const years = period === '3y' ? 3 : period === '5y' ? 5 : 10;
+    const last  = new Date(_cumData.dates[_cumData.dates.length - 1]);
+    minDate = new Date(last);
+    minDate.setFullYear(minDate.getFullYear() - years);
+  }
+  [rollRetChartInst, rollWgtChartInst].forEach(chart => {
+    if (!chart) return;
+    chart.options.scales.x.min = minDate || undefined;
+    chart.update('none');
+  });
+}
+
+// ── Colour utilities ──────────────────────────────────────────────────────────
+function hexRgba(hex, a) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+const PALETTE = [
+  '#2f5fd4','#c2651a','#0a9e72','#9333ea','#d97706',
+  '#ca8a04','#dc2626','#0d9488','#7c3aed','#c2410c',
+  '#15803d','#1d4ed8','#b45309','#6d28d9','#065f46',
+];
+
+// ── Formatters ─────────────────────────────────────────────────────────────────
+const pct  = v  => v  != null ? (v*100).toFixed(1)+'%' : '—';
+const diff = v  => v  != null ? (v>=0?'+':'')+(v*100).toFixed(1)+'%' : '—';
+const cls  = v  => v  == null ? 'na' : v > 0.001 ? 'pos' : v < -0.001 ? 'neg' : 'neu';
+const sh   = v  => v  != null ? v.toFixed(2) : '—';
+
+// ── Fund dropdown ──────────────────────────────────────────────────────────────
+async function loadFunds() {
+  const funds = await fetch('/api/funds').then(r => r.json());
+  const sel = document.getElementById('fundSelect');
+  funds.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = f.ticker;
+    const er  = f.er  != null ? ` — ${(f.er*100).toFixed(2)}% Expense Ratio` : '';
+    const cat = f.category ? ` [${f.category}]` : '';
+    opt.textContent = `${f.ticker}  |  ${f.name}${er}${cat}`;
+    sel.appendChild(opt);
+  });
+}
+
+// ── Meta chips ─────────────────────────────────────────────────────────────────
+function setChips(d) {
+  const el    = document.getElementById('metaChips');
+  const stars = d.stars ? `<span class="stars">${'&#9733;'.repeat(d.stars)}</span>` : '';
+  const er    = d.er    ? `<span class="chip">${(d.er*100).toFixed(2)}% Expense Ratio</span>` : '';
+  const cat   = d.category ? `<span class="chip">${d.category}</span>` : '';
+  const per   = `<span class="chip">${d.period.start} &rarr; ${d.period.end}</span>`;
+  const oos   = `<span class="chip">OOS from ${d.period.oos_start}</span>`;
+  el.innerHTML = `${stars} ${er} ${cat} ${per} ${oos}`;
+}
+
+// ── Fund info panel ─────────────────────────────────────────────────────────────
+async function loadFundInfo(ticker) {
+  document.getElementById('fundDesc').textContent = 'Loading…';
+  ['iFundFamily','iCategory','iInception','iAum','iEr','iRisk'].forEach(id => {
+    document.getElementById(id).textContent = '—';
+  });
+  try {
+    const info = await fetch(`/api/fundinfo/${ticker}`).then(r => r.json());
+    if (info.error) throw new Error(info.error);
+    document.getElementById('iFundFamily').textContent = info.fund_family  || '—';
+    document.getElementById('iCategory').textContent   = info.category     || '—';
+    document.getElementById('iInception').textContent  = info.inception    || '—';
+    document.getElementById('iAum').textContent        = info.total_assets || '—';
+    document.getElementById('iEr').textContent         = info.er != null ? (info.er*100).toFixed(2)+'%' : '—';
+    document.getElementById('iRisk').textContent       = info.ms_risk      || '—';
+    document.getElementById('fundDesc').textContent    = info.description  || 'No description available.';
+    return info;
+  } catch {
+    document.getElementById('fundDesc').textContent = 'Fund information unavailable.';
+    return null;
+  }
+}
+
+// ── Fee banner ─────────────────────────────────────────────────────────────────
+function setFeeBanner(d) {
+  const fundEr = d.er, repEr = d.rep_er, saving = d.fee_saving;
+
+  document.getElementById('fFundEr').textContent = fundEr != null ? (fundEr*100).toFixed(2)+'%' : 'n/a';
+  document.getElementById('fRepEr').textContent  = repEr  != null ? (repEr*100).toFixed(2)+'%'  : 'n/a';
+
+  const savEl = document.getElementById('fSaving');
+  if (saving != null) {
+    savEl.textContent = (saving >= 0 ? '+' : '') + (saving*100).toFixed(2) + '% / yr';
+    savEl.className   = 'fee-num ' + (saving > 0 ? 'pos' : 'neg');
+  } else {
+    savEl.textContent = '—';
+    savEl.className   = 'fee-num';
+  }
+
+  const note = document.getElementById('fNote');
+  if (fundEr != null && repEr != null) {
+    const fullP      = d.periods.full;
+    const netDiff    = fullP ? (fullP.fund_ret - fullP.replica_ret) : null;
+    const grossAlpha = netDiff != null ? netDiff + (fundEr - repEr) : null;
+    const verdict    = netDiff == null ? '' :
+      netDiff > 0
+        ? `Over the full OOS period the fund <strong>outperformed</strong> the replica by <strong>${(netDiff*100).toFixed(1)}% / yr</strong> net of all fees, implying ~${grossAlpha != null ? (grossAlpha*100).toFixed(1) : '?'}% gross alpha — comfortably covering its ${(saving*100).toFixed(2)}% fee premium.`
+        : `Over the full OOS period the replica <strong>beat the fund</strong> by <strong>${(Math.abs(netDiff)*100).toFixed(1)}% / yr</strong> net of fees. Even before the ${(saving*100).toFixed(2)}% fee disadvantage the fund underperformed by ${grossAlpha != null ? (Math.abs(grossAlpha)*100).toFixed(1) : '?'}% / yr gross.`;
+    note.innerHTML = `
+      Returns are <strong>net of fees</strong>: the fund NAV already reflects its ${(fundEr*100).toFixed(2)}% ER;
+      the replica ETFs cost ~${(repEr*100).toFixed(2)}% ER on average.
+      The fund must generate <strong>${(saving*100).toFixed(2)}% gross alpha / yr</strong> just to break even with a cheap passive blend.
+      ${verdict}
+    `;
+  } else {
+    note.innerHTML = 'All returns are net of fees (NAV-based).';
+  }
+}
+
+// ── Grade display ──────────────────────────────────────────────────────────────
+const GRADE_DESCS = {
+  'A':   'Excellent — consistently and meaningfully outperforms both the passive replica and SPY on a risk-adjusted, multi-period basis.',
+  'A-':  'Very good — strong outperformance vs. both the passive blend and SPY across most measured periods.',
+  'B+':  'Good — beats both the replica and SPY on a risk-adjusted basis with meaningful consistency.',
+  'B':   'Above average — adds risk-adjusted value over the passive blend; competitive with SPY.',
+  'B-':  'Slightly above average — modest outperformance of the replica; roughly in line with SPY on Sharpe.',
+  'C+':  'Just above average — marginally better than the passive replica; slightly trails SPY risk-adjusted.',
+  'C':   'Average — matches the passive replica and SPY on a risk-adjusted basis. Delivers what a cheap passive blend does, at higher cost.',
+  'C-':  'Below average — slightly underperforms its passive replica and/or SPY on a risk-adjusted basis.',
+  'D+':  'Poor — underperforms the passive replica and SPY across multiple periods. Active fee hard to justify.',
+  'D':   'Very poor — meaningfully destroys risk-adjusted value vs. both the passive blend and SPY.',
+  'F':   'Failing — significantly and consistently underperforms both benchmarks across all periods.',
+};
+
+function displayGrade(grade) {
+  const { score, grade: letter } = grade;
+  const firstChar = letter[0];   // A, B, C, D, or F
+
+  const circle = document.getElementById('gradeCircle');
+  circle.className = `grade-circle grade-${firstChar}`;
+  document.getElementById('gradeLetter').textContent      = letter;
+  document.getElementById('gradeScoreSmall').textContent  = score + '/5';
+  document.getElementById('gradeScoreMain').textContent   = score;
+  document.getElementById('gradeDesc').textContent = (GRADE_DESCS[letter] || '').replace(/SPY/g, _bmLabel);
+}
+
+// ── OOS note ───────────────────────────────────────────────────────────────────
+function setOosNote(d) {
+  const el  = document.getElementById('oosNote');
+  const oos = d.period.oos_start || '—';
+  el.innerHTML = `
+    <strong>How to read this table:</strong>
+    All rows use the <strong>rolling out-of-sample replica</strong> — ETF weights are fitted on a
+    trailing 36-month window, then applied to the following quarter, starting ${oos}.
+    Returns are <strong>annualised geometric (compound)</strong> rates, identical to the compounding
+    shown in the cumulative chart.
+    &nbsp;&bull;&nbsp;
+    <em>Trailing windows (1Y–10Y) cover only those recent months.</em>
+    The <strong>Full OOS row is derived directly from the chart's final values</strong>, so they always agree.
+  `;
+}
+
+// ── Performance tables ─────────────────────────────────────────────────────────
+const LABELS = { '1y':'1 Year','3y':'3 Years','5y':'5 Years','10y':'10 Years','full':'Full OOS Period' };
+
+function buildTables(periods) {
+  const retBody  = document.getElementById('retBody');
+  const riskBody = document.getElementById('riskBody');
+  retBody.innerHTML = riskBody.innerHTML = '';
+
+  ['1y','3y','5y','10y','full'].forEach(key => {
+    const p     = periods[key];
+    const label = p?.label || LABELS[key];
+
+    // ── Returns table row ──────────────────────────────────────────────────────
+    const retRow = document.createElement('tr');
+    if (!p) {
+      retRow.innerHTML = `<td>${label}</td><td colspan="10" class="na" style="text-align:center">Insufficient history</td>`;
+    } else {
+      const dRep    = p.fund_ret - p.replica_ret;
+      const dAdj    = p.bm_adj_ret != null ? p.fund_ret - p.bm_adj_ret : null;
+      const dQqq    = p.qqq_ret    != null ? p.fund_ret - p.qqq_ret    : null;
+      retRow.innerHTML = `
+        <td>${label}</td>
+        <td class="fund-val col-fund">${pct(p.fund_ret)}</td>
+        <td class="rep-val col-rep">${pct(p.replica_ret)}</td>
+        <td class="${cls(dRep)} col-rep">${diff(dRep)}</td>
+        <td class="neu col-rep">${pct(p.tracking_error)}</td>
+        <td class="neu col-spy">${pct(p.spy_ret)}</td>
+        <td class="neu col-spy">${pct(p.bm_adj_ret)}</td>
+        <td class="${cls(dAdj)} col-spy">${diff(dAdj)}</td>
+        <td class="neu col-qqq">${pct(p.qqq_ret)}</td>
+        <td class="${cls(dQqq)} col-qqq">${diff(dQqq)}</td>`;
+    }
+    retBody.appendChild(retRow);
+
+    // ── Risk table row ─────────────────────────────────────────────────────────
+    const riskRow = document.createElement('tr');
+    if (!p) {
+      riskRow.innerHTML = `<td>${label}</td><td colspan="10" class="na" style="text-align:center">Insufficient history</td>`;
+    } else {
+      riskRow.innerHTML = `
+        <td>${label}</td>
+        <td class="fund-val col-fund">${pct(p.fund_std)}</td>
+        <td class="rep-val col-rep">${pct(p.replica_std)}</td>
+        <td class="neu col-spy">${pct(p.spy_std)}</td>
+        <td class="neu col-spy">${pct(p.bm_adj_std)}</td>
+        <td class="neu col-qqq">${pct(p.qqq_std)}</td>
+        <td class="fund-val col-fund group-sep">${sh(p.fund_sharpe)}</td>
+        <td class="rep-val col-rep">${sh(p.replica_sharpe)}</td>
+        <td class="neu col-spy">${sh(p.spy_sharpe)}</td>
+        <td class="neu col-spy">${sh(p.bm_adj_sharpe)}</td>
+        <td class="neu col-qqq">${sh(p.qqq_sharpe)}</td>`;
+    }
+    riskBody.appendChild(riskRow);
+  });
+}
+
+// ── IS Replica toggle ──────────────────────────────────────────────────────────
+function toggleIsReplica() {
+  _showIsReplica = !_showIsReplica;
+  const btn  = document.getElementById('isToggleBtn');
+  const note = document.getElementById('isNote');
+  btn.textContent = _showIsReplica ? 'Hide IS Replica' : 'Show IS Replica';
+  btn.classList.toggle('active', _showIsReplica);
+  note.classList.toggle('visible', _showIsReplica);
+
+  [cumChartInst, rollRetChartInst].forEach(chart => {
+    if (!chart) return;
+    const ds = chart.data.datasets.find(d => d.label === 'IS Replica');
+    if (ds) { ds.hidden = !_showIsReplica; chart.update(); }
+  });
+}
+
+// ── Rolling trailing return helper ─────────────────────────────────────────────
+function rollingReturn(rets, months) {
+  return rets.map((_, i) => {
+    if (i < months - 1) return null;
+    let prod = 1;
+    for (let j = i - months + 1; j <= i; j++) prod *= (1 + rets[j]);
+    return +(prod - 1).toFixed(5);
+  });
+}
+
+// ── Rolling trailing return chart ──────────────────────────────────────────────
+function buildRollRetChart(monthlyOOS, months) {
+  if (rollRetChartInst) { rollRetChartInst.destroy(); rollRetChartInst = null; }
+  const fRoll = rollingReturn(monthlyOOS.fund,    months);
+  const rRoll = rollingReturn(monthlyOOS.replica, months);
+
+  const datasets = [
+    { label:'Fund',    data:fRoll, borderColor:'#2f5fd4',
+      backgroundColor:'rgba(47,95,212,0.07)', borderWidth:2,
+      pointRadius:0, fill:true, tension:0.1 },
+    { label:'Replica', data:rRoll, borderColor:'#c2651a',
+      backgroundColor:'rgba(194,101,26,0.06)', borderWidth:2,
+      pointRadius:0, fill:true, tension:0.1, borderDash:[5,3] },
+  ];
+  if (monthlyOOS.benchmark) {
+    datasets.push({
+      label: monthlyOOS.benchmark_ticker,
+      data:  rollingReturn(monthlyOOS.benchmark, months),
+      borderColor:'#0a9e72', backgroundColor:'rgba(10,158,114,0.05)',
+      borderWidth:1.5, pointRadius:0, fill:true, tension:0.1, borderDash:[3,3],
+    });
+  }
+  if (monthlyOOS.replica_is) {
+    datasets.push({
+      label: 'IS Replica',
+      data:  rollingReturn(monthlyOOS.replica_is, months),
+      borderColor:'#0891b2', backgroundColor:'rgba(8,145,178,0.04)',
+      borderWidth:2, pointRadius:0, fill:false, tension:0.1, borderDash:[8,4],
+      hidden: !_showIsReplica,
+    });
+  }
+
+  const ctx = document.getElementById('rollRetChart').getContext('2d');
+  rollRetChartInst = new Chart(ctx, {
+    type: 'line',
+    data: { labels: monthlyOOS.dates, datasets },
+    options: {
+      responsive:true, maintainAspectRatio:true,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ position:'top', labels:{ boxWidth:14, font:{size:11} } },
+        tooltip:{ callbacks:{
+          label: c => ` ${c.dataset.label}: ${c.parsed.y != null ? (c.parsed.y*100).toFixed(1)+'%' : '—'}`,
+        }},
+      },
+      scales:{
+        x:{ type:'time', time:{ unit:'year', displayFormats:{year:'yyyy'} },
+            grid:{color:'#edf0f7'}, ticks:{font:{size:10}, color:'#8a9ab0'} },
+        y:{ grid:{color:'#edf0f7'},
+            ticks:{font:{size:10}, color:'#8a9ab0', callback: v => (v*100).toFixed(0)+'%'} },
+      },
+    },
+  });
+}
+
+// ── Rolling weights stacked area chart ─────────────────────────────────────────
+function buildRollWgtChart(rw) {
+  if (rollWgtChartInst) { rollWgtChartInst.destroy(); rollWgtChartInst = null; }
+  if (!rw) return;
+  const ctx = document.getElementById('rollWgtChart').getContext('2d');
+
+  const datasets = rw.etfs.map((etf, i) => {
+    const isOther = etf === 'Other';
+    const base    = isOther ? '#94a3b8' : PALETTE[i % PALETTE.length];
+    return {
+      label:           etf,
+      data:            rw.series[etf],
+      fill:            true,
+      backgroundColor: hexRgba(base, isOther ? 0.42 : 0.80),
+      borderColor:     'transparent',
+      borderWidth:     0,
+      tension:         0,
+      pointRadius:     0,
+    };
+  });
+
+  rollWgtChartInst = new Chart(ctx, {
+    type: 'line',
+    data: { labels: rw.dates, datasets },
+    options: {
+      responsive:true, maintainAspectRatio:true,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ position:'bottom', labels:{ boxWidth:10, font:{size:9}, padding:6 } },
+        tooltip:{ callbacks:{ label: c => ` ${c.dataset.label}: ${(c.parsed.y*100).toFixed(1)}%` } },
+      },
+      scales:{
+        x:{ type:'time', time:{ unit:'year', displayFormats:{year:'yyyy'} },
+            grid:{color:'#edf0f7'}, ticks:{font:{size:10}, color:'#8a9ab0'} },
+        y:{ stacked:true, min:0, max:1,
+            grid:{color:'#edf0f7'},
+            ticks:{ font:{size:10}, color:'#8a9ab0', callback: v => (v*100).toFixed(0)+'%' } },
+      },
+    },
+  });
+}
+
+// ── Cumulative chart ───────────────────────────────────────────────────────────
+function buildCumChart(cum, period) {
+  if (cumChartInst) { cumChartInst.destroy(); cumChartInst = null; }
+
+  // Slice data to the selected period and rebase all series to 1.0 at the slice start
+  let dates  = cum.dates;
+  let fund   = cum.fund;
+  let rep    = cum.replica;
+  let rep_is = cum.replica_is;
+  let bm     = cum.benchmark;
+  let rebased = false;
+
+  if (period && period !== 'all' && dates.length) {
+    const years  = period === '3y' ? 3 : period === '5y' ? 5 : 10;
+    const last   = new Date(dates[dates.length - 1]);
+    const cutoff = new Date(last);
+    cutoff.setFullYear(cutoff.getFullYear() - years);
+    const idx = dates.findIndex(d => new Date(d) >= cutoff);
+    if (idx > 0) {
+      const rebase = (arr) => {
+        if (!arr) return null;
+        const base = arr[idx];
+        return base > 0 ? arr.slice(idx).map(v => +(v / base).toFixed(5)) : arr.slice(idx);
+      };
+      dates  = dates.slice(idx);
+      fund   = rebase(fund);
+      rep    = rebase(rep);
+      rep_is = rebase(rep_is);
+      bm     = rebase(bm);
+      rebased = true;
+    }
+  }
+
+  const datasets = [
+    { label:'Fund',    data:fund, borderColor:'#2f5fd4',
+      backgroundColor:'rgba(47,95,212,0.04)', borderWidth:2,
+      pointRadius:0, fill:false, tension:0.1 },
+    { label:'Replica', data:rep,  borderColor:'#c2651a',
+      backgroundColor:'rgba(194,101,26,0.04)', borderWidth:2,
+      pointRadius:0, fill:false, tension:0.1, borderDash:[5,3] },
+  ];
+  if (bm) {
+    datasets.push({
+      label: cum.benchmark_ticker, data: bm,
+      borderColor:'#0a9e72', backgroundColor:'rgba(10,158,114,0.03)',
+      borderWidth:1.5, pointRadius:0, fill:false, tension:0.1, borderDash:[3,3],
+    });
+  }
+  if (rep_is) {
+    datasets.push({
+      label: 'IS Replica', data: rep_is,
+      borderColor:'#0891b2', backgroundColor:'rgba(8,145,178,0.03)',
+      borderWidth:2, pointRadius:0, fill:false, tension:0.1, borderDash:[8,4],
+      hidden: !_showIsReplica,
+    });
+  }
+
+  const yFmt = rebased
+    ? v => (v >= 0 ? '+' : '') + ((v - 1) * 100).toFixed(0) + '%'
+    : v => v.toFixed(1) + 'x';
+  const tipFmt = rebased
+    ? c => ` ${c.dataset.label}: ${(c.parsed.y >= 0 ? '+' : '')}${((c.parsed.y - 1)*100).toFixed(1)}%`
+    : c => ` ${c.dataset.label}: ${c.parsed.y.toFixed(2)}x`;
+
+  const ctx = document.getElementById('cumChart').getContext('2d');
+  cumChartInst = new Chart(ctx, {
+    type: 'line',
+    data: { labels: dates, datasets },
+    options: {
+      responsive:true, maintainAspectRatio:true,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ position:'top', labels:{ boxWidth:14, font:{size:11} } },
+        tooltip:{ callbacks:{ label: tipFmt } },
+      },
+      scales:{
+        x:{ type:'time', time:{ unit:'year', displayFormats:{year:'yyyy'} },
+            grid:{color:'#edf0f7'}, ticks:{font:{size:10}, color:'#8a9ab0'} },
+        y:{ grid:{color:'#edf0f7'},
+            ticks:{font:{size:10}, color:'#8a9ab0', callback: yFmt} },
+      },
+    },
+  });
+}
+
+// ── Weights bar chart ──────────────────────────────────────────────────────────
+function buildWgtChart(weights) {
+  if (wgtChartInst) { wgtChartInst.destroy(); wgtChartInst = null; }
+  const entries = Object.entries(weights).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  const labels  = entries.map(([t])=>t);
+  const values  = entries.map(([,v])=>+(v*100).toFixed(1));
+  const ctx     = document.getElementById('wgtChart').getContext('2d');
+  wgtChartInst  = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[{ label:'Weight %', data:values,
+        backgroundColor: labels.map((_,i)=>PALETTE[i%PALETTE.length]),
+        borderRadius:4, borderSkipped:false }],
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:true,
+      plugins:{
+        legend:{display:false},
+        tooltip:{ callbacks:{ label: c => ` ${c.parsed.x.toFixed(1)}%` } },
+      },
+      scales:{
+        x:{ grid:{color:'#edf0f7'}, ticks:{font:{size:10}, color:'#8a9ab0', callback:v=>v+'%'},
+            max: Math.min(100, Math.ceil((values[0]||10)/10+1)*10) },
+        y:{ grid:{display:false}, ticks:{font:{size:11}, color:'#1e2a3a'} },
+      },
+    },
+  });
+}
+
+// ── Main analysis fetch ────────────────────────────────────────────────────────
+async function runAnalysis(ticker) {
+  document.getElementById('placeholder').style.display = 'none';
+  document.getElementById('dashboard').style.display   = 'none';
+  document.getElementById('loading').style.display     = 'block';
+  document.getElementById('loadMsg').textContent       = 'Running analysis…';
+  document.getElementById('metaChips').innerHTML       = '';
+  _showIsReplica = false;
+  _chartPeriod   = 'all';
+  document.getElementById('isToggleBtn').textContent = 'Show IS Replica';
+  document.getElementById('isToggleBtn').classList.remove('active');
+  document.getElementById('isNote').classList.remove('visible');
+  document.querySelectorAll('.period-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.period === 'all');
+  });
+
+  const bmVal = document.getElementById('bmInput').value.trim().toUpperCase();
+  const apiUrl = bmVal ? `/api/analyze/${ticker}?benchmark=${encodeURIComponent(bmVal)}`
+                       : `/api/analyze/${ticker}`;
+  const [data, info] = await Promise.all([
+    fetch(apiUrl).then(r => r.json()),
+    loadFundInfo(ticker),
+  ]);
+  // If backend used its 0.75% fallback ER for an unconfigured ticker, prefer
+  // yfinance's actual ER so the fee banner and chips show the same number as the info card.
+  if (info && info.er != null && (data.er == null || Math.abs((data.er||0) - 0.0075) < 0.0001)) {
+    data.er       = info.er;
+    data.fee_saving = data.fee_saving != null
+      ? parseFloat((info.er - (data.rep_er || 0)).toFixed(4))
+      : null;
+  }
+
+  if (data.error) {
+    document.getElementById('loading').style.display     = 'none';
+    document.getElementById('placeholder').style.display = 'block';
+    document.getElementById('placeholder').querySelector('p').textContent = 'Error: ' + data.error;
+    return;
+  }
+
+  _applyBmLabel(data.bm_label, data.bm_w);
+  setChips(data);
+  setFeeBanner(data);
+  setOosNote(data);
+  if (data.grade) displayGrade(data.grade);
+  buildTables(data.periods);
+
+  _cumData    = data.cumulative;
+  _monthlyOOS = data.monthly_oos;
+  buildCumChart(_cumData, _chartPeriod);
+  buildWgtChart(data.weights);
+
+  const rollWin = +document.getElementById('rollWindow').value;
+  buildRollRetChart(_monthlyOOS, rollWin);
+  buildRollWgtChart(data.rolling_weights);
+
+  document.getElementById('loading').style.display   = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+}
+
+// ── Event listeners ────────────────────────────────────────────────────────────
+document.getElementById('fundSelect').addEventListener('change', e => {
+  if (e.target.value) runAnalysis(e.target.value);
+});
+
+document.getElementById('rollWindow').addEventListener('change', e => {
+  if (_monthlyOOS) buildRollRetChart(_monthlyOOS, +e.target.value);
+});
+
+function analyzeFromInput() {
+  const ticker = document.getElementById('tickerInput').value.trim().toUpperCase();
+  if (!ticker) return;
+  // Clear the dropdown so the chips/chips reflect the manually entered ticker
+  document.getElementById('fundSelect').value = '';
+  runAnalysis(ticker);
+}
+
+document.getElementById('tickerGoBtn').addEventListener('click', analyzeFromInput);
+document.getElementById('tickerInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') analyzeFromInput();
+});
+
+loadFunds();
+</script>
+</body>
+</html>
