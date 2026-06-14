@@ -180,7 +180,7 @@ ACTIVE_MUTUAL_FUNDS: dict[str, dict] = {
     # ── Wells Fargo / Allspring ───────────────────────────────────────────────
     "WAAEX": {"name": "Allspring Growth A",                    "er": None,   "stars": None, "category": "Large Growth"},
     # ── AllianceBernstein ─────────────────────────────────────────────────────
-    "ADGAX": {"name": "AB Large Cap Growth A",                 "er": 0.0097, "stars": 4, "category": "Large Growth"},
+    "ADGAX": {"name": "AB Large Cap Growth A",                 "er": 0.0111, "stars": 4, "category": "Large Growth"},
     # ── Lateef ────────────────────────────────────────────────────────────────
     "LSGRX": {"name": "Lateef Asset Mgmt Equity Retail",       "er": None,   "stars": None, "category": "Large Blend"},
     # ── Others ────────────────────────────────────────────────────────────────
@@ -238,18 +238,22 @@ GRADE_LOW_DIFF:     float = -0.10  # Sharpe diff where score drops to 1.0
 # When no explicit benchmark override is given, this takes precedence over the
 # vol-based SPY/QQQ auto-select so mid-cap, small-cap, and international funds
 # are compared fairly against a style-matched benchmark.
+#
+# Large-cap funds (Large Blend/Growth/Value) are intentionally OMITTED — the
+# vol-based auto-select (SPY if fund vol < QQQ vol, else QQQ) already handles
+# them correctly: conservative large-growth funds like PRDGX get SPY, while
+# high-vol growth funds naturally exceed QQQ vol and get QQQ.
 CATEGORY_BM_MAP: dict[str, str] = {
-    "Large Blend":               "SPY",
-    "Large Blend (passive)":     "SPY",
-    "Large Growth":              "QQQ",
-    "Large Value":               "IVE",
+    # Mid-cap
     "Mid Growth":                "MDY",
     "Mid Blend":                 "MDY",
     "Mid-Cap Growth":            "MDY",
     "Mid Blend (passive)":       "MDY",
+    # Small-cap
     "Small Growth":              "IWM",
     "Small Blend":               "IWM",
     "Small Value":               "IWN",
+    # International / global
     "Foreign Large Blend":       "EFA",
     "Foreign Large Growth":      "EFA",
     "Foreign Large Value":       "EFA",
@@ -257,8 +261,7 @@ CATEGORY_BM_MAP: dict[str, str] = {
     "Europe Stock":              "EFA",
     "Europe Stock (passive)":    "EFA",
     "World Large Stock":         "ACWI",
-    "Moderate Allocation":       "SPY",
+    # Alternatives / fixed income
     "High Yield Bond":           "HYG",
     "Financial":                 "XLF",
-    "Active ETF":                "QQQ",
 }
