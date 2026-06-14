@@ -16,8 +16,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import app as _app
 from app import _run_analysis, _get_etf_returns, _get_tbill_monthly
 import config as cfg
+
+# Clear the in-memory cache so every fund is recomputed from scratch,
+# not returned from the pre-loaded analysis_cache.json.
+_app._fund_cache.clear()
 
 print("Pre-loading ETF and T-bill data...")
 _get_etf_returns()
