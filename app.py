@@ -129,41 +129,62 @@ _FI_BENCHMARK_CANDIDATES = [
 
 def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> str:
     """
-    Pick the FI passive whose monthly returns most closely match the fund.
+    Pick the FI passive whose annual returns most closely match the fund.
 
-    Scoring (weights chosen so credit-risk character dominates over the shared
-    interest-rate factor that inflates correlation across all bond ETFs):
-      50% return similarity  — exp(-10 * annualised RMSE); punishes actual
-                               return differences month-by-month
-      25% correlation        — co-movement direction
-      25% vol proximity      — 1 - |ln(vol_fund / vol_etf)|, capped at 1
+    Monthly correlations and vols are dominated by the shared interest-rate
+    factor, so they discriminate poorly between credit-risk tiers. Annual
+    return RMSE cuts through that: an IG-corporate fund will track LQD closely
+    year-by-year even when both move with rates.
 
-    Falls back to BND if fewer than 24 overlapping months for all candidates.
+    Scoring:
+      70%  annual return RMSE  — exp(-10 * rmse_annual); primary discriminator
+      30%  monthly correlation — co-movement direction / secondary check
+      ×    coverage ratio      — (years_overlap / fund_oos_years); penalises
+                                 ETFs with short history that appear to fit well
+                                 over fewer years
+
+    Falls back to BND if no candidate reaches 5 annual observations.
     """
+    roll_idx   = pd.DatetimeIndex(roll_fund.index)
+    fund_years = roll_idx.year.nunique()
+
+    def _ann(s: "pd.Series") -> "pd.Series":
+        s = s.copy()
+        s.index = pd.to_datetime(s.index)
+        return s.groupby(s.index.year).apply(lambda x: (1 + x).prod() - 1)
+
+    ann_fund = _ann(roll_fund)
+
     best_ticker = "BND"
     best_score  = -np.inf
-    fund_std    = float(roll_fund.std())
 
     for t in _FI_BENCHMARK_CANDIDATES:
         if t not in etf_ret_raw.columns:
             continue
-        etf_s   = etf_ret_raw[t].reindex(roll_fund.index).ffill()
-        overlap = etf_s.notna() & roll_fund.notna()
+        etf_s    = etf_ret_raw[t].reindex(roll_fund.index).ffill()
+        overlap  = etf_s.notna() & roll_fund.notna()
         if overlap.sum() < 24:
             continue
-        f = roll_fund[overlap].values
-        e = etf_s[overlap].values
 
-        rmse        = float(np.sqrt(np.mean((f - e) ** 2)) * np.sqrt(12))
-        ret_score   = float(np.exp(-10.0 * rmse))          # ~1.0 when rmse≈0, ~0.4 at 9bp/mo
+        # Annual RMSE across shared calendar years
+        ann_etf  = _ann(etf_s.dropna())
+        common   = ann_fund.index.intersection(ann_etf.index)
+        if len(common) < 5:
+            continue
+        f_ann = ann_fund[common].values
+        e_ann = ann_etf[common].values
+        ann_rmse  = float(np.sqrt(np.mean((f_ann - e_ann) ** 2)))
+        ret_score = float(np.exp(-10.0 * ann_rmse))
 
-        corr        = float(np.corrcoef(f, e)[0, 1])
+        # Monthly correlation (secondary)
+        f_mo = roll_fund[overlap].values
+        e_mo = etf_s[overlap].values
+        corr = float(np.corrcoef(f_mo, e_mo)[0, 1])
 
-        etf_std     = float(e.std())
-        vol_score   = (1.0 - min(abs(np.log(fund_std / etf_std)), 1.0)
-                       if etf_std > 0 and fund_std > 0 else 0.0)
+        # Penalise ETFs that only cover part of the fund's OOS history
+        coverage = len(common) / max(fund_years, 1)
 
-        score = 0.50 * ret_score + 0.25 * corr + 0.25 * vol_score
+        score = (0.70 * ret_score + 0.30 * corr) * coverage
         if score > best_score:
             best_score  = score
             best_ticker = t
