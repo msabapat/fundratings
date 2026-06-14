@@ -129,9 +129,16 @@ _FI_BENCHMARK_CANDIDATES = [
 
 def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> str:
     """
-    Pick the FI passive ETF whose OOS returns best match the fund.
-    Scoring: 70% correlation + 30% (1 - |log vol ratio|) — rewards both
-    co-movement and similar risk level.  Falls back to BND if nothing qualifies.
+    Pick the FI passive whose monthly returns most closely match the fund.
+
+    Scoring (weights chosen so credit-risk character dominates over the shared
+    interest-rate factor that inflates correlation across all bond ETFs):
+      50% return similarity  — exp(-10 * annualised RMSE); punishes actual
+                               return differences month-by-month
+      25% correlation        — co-movement direction
+      25% vol proximity      — 1 - |ln(vol_fund / vol_etf)|, capped at 1
+
+    Falls back to BND if fewer than 24 overlapping months for all candidates.
     """
     best_ticker = "BND"
     best_score  = -np.inf
@@ -144,12 +151,19 @@ def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> s
         overlap = etf_s.notna() & roll_fund.notna()
         if overlap.sum() < 24:
             continue
-        corr     = float(roll_fund[overlap].corr(etf_s[overlap]))
-        etf_std  = float(etf_s[overlap].std())
-        if etf_std <= 0 or fund_std <= 0:
-            continue
-        vol_score = 1.0 - min(abs(np.log(fund_std / etf_std)), 1.0)
-        score     = 0.70 * corr + 0.30 * vol_score
+        f = roll_fund[overlap].values
+        e = etf_s[overlap].values
+
+        rmse        = float(np.sqrt(np.mean((f - e) ** 2)) * np.sqrt(12))
+        ret_score   = float(np.exp(-10.0 * rmse))          # ~1.0 when rmse≈0, ~0.4 at 9bp/mo
+
+        corr        = float(np.corrcoef(f, e)[0, 1])
+
+        etf_std     = float(e.std())
+        vol_score   = (1.0 - min(abs(np.log(fund_std / etf_std)), 1.0)
+                       if etf_std > 0 and fund_std > 0 else 0.0)
+
+        score = 0.50 * ret_score + 0.25 * corr + 0.25 * vol_score
         if score > best_score:
             best_score  = score
             best_ticker = t
