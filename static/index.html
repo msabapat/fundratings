@@ -506,6 +506,7 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
       <div class="chart-card">
         <h3>ETF Weights Over Time (Rolling Rebalance)</h3>
         <canvas id="rollWgtChart"></canvas>
+        <p id="etfFootnote" style="display:none; font-size:10px; color:#8a9ab0; margin:8px 0 0; line-height:1.6;"></p>
       </div>
     </div>
 
@@ -862,7 +863,8 @@ function buildRollWgtChart(rw) {
     const isOther = etf === 'Other';
     const base    = isOther ? '#94a3b8' : PALETTE[i % PALETTE.length];
     return {
-      label:           etf,
+      label:           isOther ? 'Other' : `ETF ${i + 1}`,
+      _etfTicker:      etf,
       data:            rw.series[etf],
       fill:            true,
       backgroundColor: hexRgba(base, isOther ? 0.42 : 0.80),
@@ -881,7 +883,7 @@ function buildRollWgtChart(rw) {
       interaction:{ mode:'index', intersect:false },
       plugins:{
         legend:{ position:'bottom', labels:{ boxWidth:10, font:{size:9}, padding:6 } },
-        tooltip:{ callbacks:{ label: c => ` ${c.dataset.label}: ${(c.parsed.y*100).toFixed(1)}%` } },
+        tooltip:{ callbacks:{ label: c => ` ${c.dataset._etfTicker}: ${(c.parsed.y*100).toFixed(1)}%` } },
       },
       scales:{
         x:{ type:'time', time:{ unit:'year', displayFormats:{year:'yyyy'} },
@@ -1063,6 +1065,14 @@ async function runAnalysis(ticker) {
   const rollWin = +document.getElementById('rollWindow').value;
   buildRollRetChart(_monthlyOOS, rollWin);
   buildRollWgtChart(data.rolling_weights);
+
+  const fn = document.getElementById('etfFootnote');
+  if (data.passive_etfs && data.passive_etfs.length) {
+    fn.textContent = 'Candidate passive ETF universe (' + data.passive_etfs.length + '): ' + data.passive_etfs.join(', ');
+    fn.style.display = 'block';
+  } else {
+    fn.style.display = 'none';
+  }
 
   document.getElementById('loading').style.display   = 'none';
   document.getElementById('dashboard').style.display = 'block';

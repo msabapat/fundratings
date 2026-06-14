@@ -468,6 +468,7 @@ def analyze(ticker: str):
         category = meta.get("category", "Unknown"),
         rep_er   = rep_er,
         fee_saving = fee_saving,
+        passive_etfs = sorted(cfg.PASSIVE_ETFS.keys()),
         period   = dict(
             start  = str(fund_ret.index[0].date()),
             end    = str(fund_ret.index[-1].date()),
@@ -497,10 +498,11 @@ def analyze(ticker: str):
     return jsonify(result)
 
 
-# Pre-load ETF data at import time when running under gunicorn so the first
-# request isn't slow. When run directly (__main__), the block below handles it.
+# Pre-load ETF data and T-bill rate at import time (gunicorn workers).
+# T-bill is fetched in a background thread so it doesn't block worker startup.
 if __name__ != "__main__":
     _get_etf_returns()
+    threading.Thread(target=_get_tbill_monthly, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))

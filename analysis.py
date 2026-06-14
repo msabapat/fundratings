@@ -51,7 +51,7 @@ def constrained_ols(
         objective, w0, jac=gradient, method="SLSQP",
         bounds=[(0.0, 1.0)] * n,
         constraints=constraints,
-        options={"maxiter": 2000, "ftol": 1e-14},
+        options={"maxiter": 2000, "ftol": 1e-10},
     )
     w = np.clip(result.x, 0.0, 1.0)
     w /= w.sum()
@@ -136,34 +136,50 @@ def rolling_replication(
     train_months:  int   = 36,
     rebal_months:  int   = 3,
     min_vol_ratio: float = 0.0,
+    max_etfs:      int   = 30,
+    n_jobs:        int   = 4,
 ) -> dict:
     """
     Fit constrained OLS on trailing `train_months` months, hold for
     `rebal_months` then refit. Returns OOS monthly returns alongside fund.
 
-    min_vol_ratio is passed to each constrained_ols call to enforce a
-    variance floor: replica_var >= min_vol_ratio^2 * fund_var, estimated
-    within each training window (fully out-of-sample).
+    Pre-screens to `max_etfs` by absolute correlation before the rolling loop
+    (SLSQP is much faster on 30 ETFs than 80 with near-identical results).
+    Fits are parallelised across rebalance periods via ThreadPoolExecutor
+    (scipy releases the GIL during SLSQP).
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     n = len(fund_ret)
     if n <= train_months:
         raise ValueError(f"Not enough data: {n} months <= train window {train_months}")
 
+    # Pre-screen: keep only the most correlated ETFs to reduce SLSQP size
+    if len(etf_ret.columns) > max_etfs:
+        top_cols   = etf_ret.corrwith(fund_ret).abs().nlargest(max_etfs).index.tolist()
+        etf_screen = etf_ret[top_cols]
+    else:
+        etf_screen = etf_ret
+
     dates        = fund_ret.index.tolist()
+    period_idxs  = list(range(train_months, n, rebal_months))
+
+    def _fit(i):
+        etf_tr  = etf_screen.iloc[i - train_months : i].values
+        fund_tr = fund_ret.iloc[i - train_months : i].values
+        return i, constrained_ols(fund_tr, etf_tr, min_vol_ratio=min_vol_ratio)
+
+    with ThreadPoolExecutor(max_workers=n_jobs) as ex:
+        fits = dict(ex.map(_fit, period_idxs))
+
     replica_rets = {}
     weights_log  = {}
-
-    for i in range(train_months, n, rebal_months):
-        # Train on [i-train:i]
-        etf_tr  = etf_ret.iloc[i - train_months : i].values
-        fund_tr = fund_ret.iloc[i - train_months : i].values
-        w = constrained_ols(fund_tr, etf_tr, min_vol_ratio=min_vol_ratio)
-
-        # Apply weights for next rebal_months (or until end)
+    for i in period_idxs:
+        w   = fits[i]
         end = min(i + rebal_months, n)
         for j in range(i, end):
-            replica_rets[dates[j]] = float(etf_ret.iloc[j].values @ w)
-            weights_log[dates[j]]  = pd.Series(w, index=etf_ret.columns)
+            replica_rets[dates[j]] = float(etf_screen.iloc[j].values @ w)
+            weights_log[dates[j]]  = pd.Series(w, index=etf_screen.columns)
 
     rep_series = pd.Series(replica_rets, name="replica")
     fund_oos   = fund_ret.loc[rep_series.index]
