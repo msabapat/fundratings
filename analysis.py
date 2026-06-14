@@ -20,12 +20,46 @@ def constrained_ols(
     Non-negative weights summing to 1, minimising sum-of-squared residuals.
     Implements Sharpe (1992) Return-Based Style Analysis.
 
-    min_vol_ratio > 0 adds an inequality constraint:
-        w^T Σ w  >=  min_vol_ratio^2 * Var(fund)
-    forcing the replica to reach at least that fraction of the fund's volatility.
-    Use 1.0 to match fund vol exactly; 1.1 to add a 10% concentration buffer.
+    Uses quadprog (pure-C QP solver, no Python callbacks → GIL released for the
+    entire solve, true thread parallelism). Falls back to SLSQP when quadprog is
+    unavailable or when the vol constraint can't be satisfied by the QP solution.
+
+    min_vol_ratio > 0 adds: w^T Σ w >= min_vol_ratio^2 * Var(fund)
     """
     n = etf_ret.shape[1]
+
+    # ── quadprog fast path ────────────────────────────────────────────────────
+    # quadprog solves: min 0.5 w^T G w - a^T w  s.t. C^T w >= b
+    # Our problem:     min w^T (X^T X) w - 2(X^T f)^T w
+    #   → G = 2 X^T X,  a = 2 X^T f
+    #   Constraints: sum(w)=1 (equality, meq=1), w_i >= 0 (inequality)
+    try:
+        import quadprog
+        G   = 2.0 * (etf_ret.T @ etf_ret) + 1e-10 * np.eye(n)
+        a   = 2.0 * (etf_ret.T @ fund_ret)
+        C   = np.column_stack([np.ones(n), np.eye(n)])   # (n, n+1)
+        b   = np.concatenate([[1.0], np.zeros(n)])
+        w   = quadprog.solve_qp(G, a, C, b, 1)[0]        # meq=1
+        w   = np.clip(w, 0.0, 1.0)
+        s   = w.sum()
+        if s <= 0:
+            raise ValueError("zero-weight solution")
+        w /= s
+
+        # Check vol constraint — quadprog can't enforce the quadratic inequality,
+        # so verify it. For equity funds this is almost always satisfied.
+        if min_vol_ratio > 0.0:
+            _target_var = min_vol_ratio ** 2 * float(np.var(fund_ret, ddof=1))
+            _cov        = np.cov(etf_ret.T) if n > 1 else np.array([[float(np.var(etf_ret))]])
+            if float(w @ _cov @ w) >= _target_var * 0.999:
+                return w
+            # Constraint not met → fall through to SLSQP
+        else:
+            return w
+    except Exception:
+        pass   # quadprog unavailable or failed → use SLSQP
+
+    # ── SLSQP fallback (handles quadratic vol constraint) ────────────────────
     w0 = np.ones(n) / n
 
     def objective(w):
@@ -37,12 +71,10 @@ def constrained_ols(
     constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1.0}]
 
     if min_vol_ratio > 0.0:
-        # Capture by value — avoids closure-over-loop-variable bugs
         _target_var = min_vol_ratio ** 2 * float(np.var(fund_ret, ddof=1))
         _cov        = np.cov(etf_ret.T) if n > 1 else np.array([[float(np.var(etf_ret))]])
         constraints.append({
             "type": "ineq",
-            # >= 0  →  portfolio variance must be >= target
             "fun":  lambda w, cov=_cov, tv=_target_var: float(w @ cov @ w) - tv,
             "jac":  lambda w, cov=_cov:                 2.0 * cov @ w,
         })
@@ -137,7 +169,7 @@ def rolling_replication(
     rebal_months:  int   = 3,
     min_vol_ratio: float = 0.0,
     max_etfs:      int   = 30,
-    n_jobs:        int   = 4,
+    n_jobs:        int   = 0,   # 0 = auto (use all CPU cores)
 ) -> dict:
     """
     Fit constrained OLS on trailing `train_months` months, hold for
@@ -148,7 +180,11 @@ def rolling_replication(
     Fits are parallelised across rebalance periods via ThreadPoolExecutor
     (scipy releases the GIL during SLSQP).
     """
+    import os
     from concurrent.futures import ThreadPoolExecutor
+
+    if n_jobs <= 0:
+        n_jobs = os.cpu_count() or 4
 
     n = len(fund_ret)
     if n <= train_months:
