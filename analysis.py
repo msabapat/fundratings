@@ -20,73 +20,60 @@ def constrained_ols(
     Non-negative weights summing to 1, minimising sum-of-squared residuals.
     Implements Sharpe (1992) Return-Based Style Analysis.
 
-    Uses quadprog (pure-C QP solver, no Python callbacks → GIL released for the
-    entire solve, true thread parallelism). Falls back to SLSQP when quadprog is
-    unavailable or when the vol constraint can't be satisfied by the QP solution.
-
-    min_vol_ratio > 0 adds: w^T Σ w >= min_vol_ratio^2 * Var(fund)
+    Uses quadprog (pure-C QP, no Python callbacks, GIL fully released) with a
+    fast post-hoc binary-search vol adjustment. SLSQP only if quadprog missing.
     """
     n = etf_ret.shape[1]
 
-    # ── quadprog fast path ────────────────────────────────────────────────────
-    # quadprog solves: min 0.5 w^T G w - a^T w  s.t. C^T w >= b
-    # Our problem:     min w^T (X^T X) w - 2(X^T f)^T w
-    #   → G = 2 X^T X,  a = 2 X^T f
-    #   Constraints: sum(w)=1 (equality, meq=1), w_i >= 0 (inequality)
+    # ── Step 1: solve pure RBSA QP with quadprog ─────────────────────────────
+    # quadprog: min 0.5 w^T G w - a^T w  s.t. C^T w >= b  (meq=1 equality)
+    # Equivalent to min ||f - X w||^2  s.t. sum(w)=1, w>=0
+    # Pure C with no Python callbacks -> GIL fully released -> true parallelism.
     try:
         import quadprog
-        G   = 2.0 * (etf_ret.T @ etf_ret) + 1e-10 * np.eye(n)
-        a   = 2.0 * (etf_ret.T @ fund_ret)
-        C   = np.column_stack([np.ones(n), np.eye(n)])   # (n, n+1)
-        b   = np.concatenate([[1.0], np.zeros(n)])
-        w   = quadprog.solve_qp(G, a, C, b, 1)[0]        # meq=1
-        w   = np.clip(w, 0.0, 1.0)
-        s   = w.sum()
+        G = 2.0 * (etf_ret.T @ etf_ret) + 1e-10 * np.eye(n)
+        a = 2.0 * (etf_ret.T @ fund_ret)
+        C = np.column_stack([np.ones(n), np.eye(n)])
+        b = np.concatenate([[1.0], np.zeros(n)])
+        w = quadprog.solve_qp(G, a, C, b, 1)[0]
+        w = np.clip(w, 0.0, 1.0)
+        s = w.sum()
         if s <= 0:
-            raise ValueError("zero-weight solution")
+            raise ValueError("degenerate")
         w /= s
-
-        # Check vol constraint — quadprog can't enforce the quadratic inequality,
-        # so verify it. For equity funds this is almost always satisfied.
-        if min_vol_ratio > 0.0:
-            _target_var = min_vol_ratio ** 2 * float(np.var(fund_ret, ddof=1))
-            _cov        = np.cov(etf_ret.T) if n > 1 else np.array([[float(np.var(etf_ret))]])
-            if float(w @ _cov @ w) >= _target_var * 0.999:
-                return w
-            # Constraint not met → fall through to SLSQP
-        else:
-            return w
     except Exception:
-        pass   # quadprog unavailable or failed → use SLSQP
+        # SLSQP fallback — only if quadprog not installed or numerically broken
+        w0  = np.ones(n) / n
+        res = minimize(
+            lambda w: np.sum((fund_ret - etf_ret @ w) ** 2),
+            w0, jac=lambda w: -2.0 * etf_ret.T @ (fund_ret - etf_ret @ w),
+            method="SLSQP", bounds=[(0.0, 1.0)] * n,
+            constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1.0}],
+            options={"ftol": 1e-10},
+        )
+        w = np.clip(res.x, 0.0, 1.0); w /= w.sum()
 
-    # ── SLSQP fallback (handles quadratic vol constraint) ────────────────────
-    w0 = np.ones(n) / n
-
-    def objective(w):
-        return np.sum((fund_ret - etf_ret @ w) ** 2)
-
-    def gradient(w):
-        return -2.0 * etf_ret.T @ (fund_ret - etf_ret @ w)
-
-    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1.0}]
-
+    # ── Step 2: post-hoc vol adjustment (no SLSQP needed) ────────────────────
+    # quadprog can't enforce the quadratic vol inequality, so check it here.
+    # If the QP solution undershoots target vol, binary-search a blend toward
+    # the highest-variance ETF until the constraint is met. O(40 * n) — trivial.
     if min_vol_ratio > 0.0:
-        _target_var = min_vol_ratio ** 2 * float(np.var(fund_ret, ddof=1))
-        _cov        = np.cov(etf_ret.T) if n > 1 else np.array([[float(np.var(etf_ret))]])
-        constraints.append({
-            "type": "ineq",
-            "fun":  lambda w, cov=_cov, tv=_target_var: float(w @ cov @ w) - tv,
-            "jac":  lambda w, cov=_cov:                 2.0 * cov @ w,
-        })
+        cov        = np.cov(etf_ret.T) if n > 1 else np.array([[float(np.var(etf_ret))]])
+        target_var = min_vol_ratio ** 2 * float(np.var(fund_ret, ddof=1))
+        if float(w @ cov @ w) < target_var * 0.999:
+            e_max    = np.zeros(n)
+            e_max[int(np.argmax(np.diag(cov)))] = 1.0
+            lo, hi   = 0.0, 1.0
+            for _ in range(40):
+                mid   = (lo + hi) / 2
+                w_try = mid * w + (1.0 - mid) * e_max
+                if float(w_try @ cov @ w_try) >= target_var:
+                    lo = mid
+                else:
+                    hi = mid
+            w = lo * w + (1.0 - lo) * e_max
+            w = np.clip(w, 0.0, 1.0); w /= w.sum()
 
-    result = minimize(
-        objective, w0, jac=gradient, method="SLSQP",
-        bounds=[(0.0, 1.0)] * n,
-        constraints=constraints,
-        options={"maxiter": 2000, "ftol": 1e-10},
-    )
-    w = np.clip(result.x, 0.0, 1.0)
-    w /= w.sum()
     return w
 
 
