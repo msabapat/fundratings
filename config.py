@@ -225,9 +225,9 @@ MIN_VOL_RATIO       = 1.0
 GRADE_TIME_WEIGHTS: dict[str, float] = {
     "10y":  0.35,
     "full": 0.20,
-    "5y":   0.15,
+    "5y":   0.25,
     "3y":   0.15,
-    "1y":   0.15,
+    "1y":   0.05,
 }
 GRADE_BLEND_REP_WT: float = 0.50   # replica's share in the Sharpe blend (vs bm_adj)
 GRADE_HIGH_DIFF:    float =  0.10  # Sharpe diff where score reaches 5.0
