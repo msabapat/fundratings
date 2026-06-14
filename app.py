@@ -99,6 +99,33 @@ def _trailing(months: int, fund: pd.Series, replica: pd.Series,
     return result
 
 
+def _infer_fi_category(w: np.ndarray, columns) -> str:
+    """
+    Infer a Morningstar-like fixed income category from RBSA weights when
+    the fund's category is unknown (e.g. yfinance returned None).
+
+    Returns a non-empty string only when FI ETFs dominate (>50% weight),
+    so equity funds pass through unchanged and get the vol-based benchmark.
+    """
+    wd     = dict(zip(columns, w))
+    fi_wt  = sum(v for k, v in wd.items() if k in cfg.FI_ETFS)
+    if fi_wt < 0.50:
+        return ""
+
+    hy_wt   = sum(wd.get(e, 0) for e in ["HYG", "CWB"])
+    em_wt   = wd.get("EMB", 0)
+    ig_wt   = sum(wd.get(e, 0) for e in ["LQD", "VCSH"])
+    long_wt = wd.get("TLT", 0)
+    short_wt= sum(wd.get(e, 0) for e in ["SHY", "VCSH"])
+
+    if hy_wt   > 0.30: return "High Yield Bond"
+    if em_wt   > 0.25: return "Emerging Markets Bond"
+    if ig_wt   > 0.30: return "Corporate Bond"
+    if long_wt > 0.40: return "Long Government"
+    if short_wt> 0.40: return "Short-Term Bond"
+    return "Multisector Bond"   # mixed / intermediate-grade default
+
+
 def _grade_description(f_sr, r_sr, b_sr, bm_label: str = "benchmark") -> str:
     """Narrative sentence describing fund Sharpe vs replica and vs risk-adj benchmark."""
     if f_sr is None:
@@ -365,16 +392,31 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # Fund vol needed for benchmark selection and vol-adjustment below
     std_f_full = float(roll_fund.std() * np.sqrt(12))
 
+    # For uncategorised funds (e.g. custom tickers not in config, yfinance returned None),
+    # infer a fixed-income category from the RBSA weights so bond funds get a bond
+    # benchmark instead of being stuck with SPY.
+    if not bm_override and not meta.get("category"):
+        _inferred = _infer_fi_category(w, etf_aligned.columns)
+        if _inferred:
+            meta = {**meta, "category": _inferred}  # copy — never mutate the config dict
+
     # Determine the category-appropriate benchmark (used when no bm_override given)
     _cat_bm = cfg.CATEGORY_BM_MAP.get(meta.get("category", ""), "") if not bm_override else ""
 
     # Load benchmark series into dict. Always include SPY and QQQ; also pre-load
     # the category benchmark so it's available for the auto-select below.
+    # SPY/QQQ are sourced from etf_aligned (guaranteed to cover the full fund history).
+    # The category benchmark may have a later inception than the fund (e.g. BND launched
+    # 2007, PDBZX 2005), so align() drops it from etf_aligned. Load it from the raw
+    # etf_ret instead, restricted to the OOS window where it does exist.
     benchmarks: dict[str, pd.Series] = {}
+    _etf_ret_raw = _get_etf_returns()
     for _bmt in {"SPY", "QQQ", _cat_bm} - {""}:
-        if _bmt in etf_aligned.columns:
-            _bm_s = etf_aligned[_bmt].reindex(roll_fund.index)
-            if _bm_s.notna().all():
+        _src = etf_aligned if _bmt in etf_aligned.columns else _etf_ret_raw
+        if _bmt in _src.columns:
+            _bm_s = _src[_bmt].reindex(roll_fund.index)
+            _bm_s = _bm_s.ffill()
+            if _bm_s.notna().sum() >= 12:
                 benchmarks[_bmt] = _bm_s
 
     # Custom benchmark override — replaces "SPY" in benchmarks dict so all

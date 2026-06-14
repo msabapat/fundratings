@@ -236,32 +236,70 @@ GRADE_LOW_DIFF:     float = -0.10  # Sharpe diff where score drops to 1.0
 # ── Category → benchmark mapping ──────────────────────────────────────────────
 # Maps Morningstar category to the most appropriate passive benchmark ETF.
 # When no explicit benchmark override is given, this takes precedence over the
-# vol-based SPY/QQQ auto-select so mid-cap, small-cap, and international funds
-# are compared fairly against a style-matched benchmark.
+# vol-based SPY/QQQ auto-select so mid-cap, small-cap, international, and fixed
+# income funds are compared fairly against a style-matched benchmark.
 #
 # Large-cap funds (Large Blend/Growth/Value) are intentionally OMITTED — the
-# vol-based auto-select (SPY if fund vol < QQQ vol, else QQQ) already handles
-# them correctly: conservative large-growth funds like PRDGX get SPY, while
-# high-vol growth funds naturally exceed QQQ vol and get QQQ.
+# vol-based auto-select (SPY if fund vol < QQQ vol, else QQQ) handles them well.
+#
+# For unconfigured tickers where yfinance returns no category, app.py uses
+# _infer_fi_category() to detect fixed income from RBSA weights automatically.
 CATEGORY_BM_MAP: dict[str, str] = {
     # Mid-cap
-    "Mid Growth":                "MDY",
-    "Mid Blend":                 "MDY",
-    "Mid-Cap Growth":            "MDY",
-    "Mid Blend (passive)":       "MDY",
+    "Mid Growth":                    "MDY",
+    "Mid Blend":                     "MDY",
+    "Mid-Cap Growth":                "MDY",
+    "Mid Blend (passive)":           "MDY",
     # Small-cap
-    "Small Growth":              "IWM",
-    "Small Blend":               "IWM",
-    "Small Value":               "IWN",
+    "Small Growth":                  "IWM",
+    "Small Blend":                   "IWM",
+    "Small Value":                   "IWN",
     # International / global
-    "Foreign Large Blend":       "EFA",
-    "Foreign Large Growth":      "EFA",
-    "Foreign Large Value":       "EFA",
-    "Foreign Small/Mid Growth":  "EFA",
-    "Europe Stock":              "EFA",
-    "Europe Stock (passive)":    "EFA",
-    "World Large Stock":         "ACWI",
-    # Alternatives / fixed income
-    "High Yield Bond":           "HYG",
-    "Financial":                 "XLF",
+    "Foreign Large Blend":           "EFA",
+    "Foreign Large Growth":          "EFA",
+    "Foreign Large Value":           "EFA",
+    "Foreign Small/Mid Growth":      "EFA",
+    "Europe Stock":                  "EFA",
+    "Europe Stock (passive)":        "EFA",
+    "World Large Stock":             "ACWI",
+    # Fixed income — credit
+    "High Yield Bond":               "HYG",
+    "Corporate Bond":                "LQD",
+    "Bank Loan":                     "HYG",
+    "Convertibles":                  "CWB",
+    "Preferred Stock":               "PFF",
+    # Fixed income — core / multi-sector
+    "Intermediate Core Bond":        "BND",
+    "Intermediate Core-Plus Bond":   "LQD",
+    "Intermediate-Term Bond":        "BND",
+    "Multisector Bond":              "BND",
+    "Nontraditional Bond":           "BND",
+    "Total Return Bond":             "BND",
+    # Fixed income — government / duration
+    "Long Government":               "TLT",
+    "Long-Term Bond":                "TLT",
+    "Intermediate Government":       "IEF",
+    "Short Government":              "SHY",
+    "Short-Term Bond":               "SHY",
+    "Ultrashort Bond":               "SHY",
+    "Inflation-Protected Bond":      "TIP",
+    # Fixed income — specialty
+    "Muni National Interm":          "MUB",
+    "Muni National Long":            "MUB",
+    "Muni National Short":           "MUB",
+    "Muni California Interm/Short":  "MUB",
+    "Muni California Long":          "MUB",
+    "Emerging Markets Bond":         "EMB",
+    "World Bond":                    "BND",
+    # Equity sector
+    "Financial":                     "XLF",
 }
+
+# Fixed income ETFs present in the passive universe — used by _infer_fi_category()
+# to auto-detect bond funds when Morningstar category is unavailable from yfinance.
+FI_ETFS: frozenset = frozenset({
+    "TLT", "IEF", "SHY", "GOVT", "TIP",   # government / duration
+    "LQD", "HYG", "VCSH", "CWB",           # credit
+    "BND", "BNDX",                          # broad bond
+    "MUB", "EMB",                           # muni / EM
+})
