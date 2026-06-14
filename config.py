@@ -219,3 +219,46 @@ LASSO_N_ALPHAS      = 50             # number of alpha values to CV over
 # 1.1 = add 10% buffer to account for fund concentration risk.
 # Raises tracking error slightly; set to 0 to disable.
 MIN_VOL_RATIO       = 1.0
+
+# ── Grade / scoring parameters ────────────────────────────────────────────────
+# Period weights for weighted-average Sharpe used in scoring (re-normalised if period unavailable)
+GRADE_TIME_WEIGHTS: dict[str, float] = {
+    "10y":  0.35,
+    "full": 0.20,
+    "5y":   0.15,
+    "3y":   0.15,
+    "1y":   0.15,
+}
+GRADE_BLEND_REP_WT: float = 0.50   # replica's share in the Sharpe blend (vs bm_adj)
+GRADE_HIGH_DIFF:    float =  0.10  # Sharpe diff where score reaches 5.0
+GRADE_LOW_DIFF:     float = -0.10  # Sharpe diff where score drops to 1.0
+
+# ── Category → benchmark mapping ──────────────────────────────────────────────
+# Maps Morningstar category to the most appropriate passive benchmark ETF.
+# When no explicit benchmark override is given, this takes precedence over the
+# vol-based SPY/QQQ auto-select so mid-cap, small-cap, and international funds
+# are compared fairly against a style-matched benchmark.
+CATEGORY_BM_MAP: dict[str, str] = {
+    "Large Blend":               "SPY",
+    "Large Blend (passive)":     "SPY",
+    "Large Growth":              "QQQ",
+    "Large Value":               "IVE",
+    "Mid Growth":                "MDY",
+    "Mid Blend":                 "MDY",
+    "Mid-Cap Growth":            "MDY",
+    "Mid Blend (passive)":       "MDY",
+    "Small Growth":              "IWM",
+    "Small Blend":               "IWM",
+    "Small Value":               "IWN",
+    "Foreign Large Blend":       "EFA",
+    "Foreign Large Growth":      "EFA",
+    "Foreign Large Value":       "EFA",
+    "Foreign Small/Mid Growth":  "EFA",
+    "Europe Stock":              "EFA",
+    "Europe Stock (passive)":    "EFA",
+    "World Large Stock":         "ACWI",
+    "Moderate Allocation":       "SPY",
+    "High Yield Bond":           "HYG",
+    "Financial":                 "XLF",
+    "Active ETF":                "QQQ",
+}

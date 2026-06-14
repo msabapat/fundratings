@@ -99,50 +99,102 @@ def _trailing(months: int, fund: pd.Series, replica: pd.Series,
     return result
 
 
-def _fund_grade(periods: dict) -> dict:
+def _grade_description(f_sr, r_sr, b_sr, bm_label: str = "benchmark") -> str:
+    """Narrative sentence describing fund Sharpe vs replica and vs risk-adj benchmark."""
+    if f_sr is None:
+        return "Insufficient data to assess fund performance."
+
+    def _verdict(d, pos, neg, match):
+        if   d >=  0.10: return pos + " by a wide margin"
+        elif d >=  0.03: return pos + " modestly"
+        elif d >= -0.03: return match
+        elif d >= -0.10: return neg + " modestly"
+        else:            return neg + " by a wide margin"
+
+    parts = []
+    if r_sr is not None:
+        d   = f_sr - r_sr
+        v   = _verdict(d, "outperforms replica", "trails replica", "matches replica")
+        parts.append(f"{v} ({d:+.2f} Sharpe)")
+    if b_sr is not None:
+        d   = f_sr - b_sr
+        bm  = f"risk-adj {bm_label}"
+        v   = _verdict(d, f"outperforms {bm}", f"trails {bm}", f"matches {bm}")
+        parts.append(f"{v} ({d:+.2f} Sharpe)")
+
+    if not parts:
+        return "Insufficient benchmark data for detailed assessment."
+    return "Fund " + "; ".join(parts) + "."
+
+
+def _fund_grade(periods: dict, bm_label: str = "benchmark") -> dict:
     """
     Multi-period weighted grade on a 1–5 scale.
-    Time weights: Full 30%, 10y 25%, 5y 15%, 3y 15%, 1y 15%.
-    Factor weights: 60% vs replica Sharpe, 40% vs SPY Sharpe.
-    Baseline 3.0 = C → fund matches both its replica AND SPY on risk-adj basis.
+    Uses GRADE_TIME_WEIGHTS, GRADE_BLEND_REP_WT, GRADE_HIGH_DIFF, GRADE_LOW_DIFF from config.
+    Score 5.0 = fund Sharpe exceeds 50/50 blend of (replica, bm_adj) by +GRADE_HIGH_DIFF.
+    Score 3.0 = even; 1.0 = trails by GRADE_LOW_DIFF. Linear interpolation in between.
+    Also returns wtd_avg metrics dict for the weighted-average table row.
     """
-    TIME_W = {'full': 0.30, '10y': 0.25, '5y': 0.15, '3y': 0.15, '1y': 0.15}
+    TW = cfg.GRADE_TIME_WEIGHTS
 
-    sum_vs_rep = 0.0;  tot_rep_w = 0.0
-    sum_vs_spy = 0.0;  tot_spy_w = 0.0
+    _metric_keys = [
+        'fund_ret', 'replica_ret', 'fund_std', 'replica_std', 'tracking_error',
+        'fund_sharpe', 'replica_sharpe',
+        'spy_ret', 'spy_std', 'spy_sharpe',
+        'bm_adj_ret', 'bm_adj_std', 'bm_adj_sharpe',
+        'qqq_ret', 'qqq_std', 'qqq_sharpe',
+    ]
+    wtd_sums = {k: 0.0 for k in _metric_keys}
+    wtd_wts  = {k: 0.0 for k in _metric_keys}
 
-    for key, tw in TIME_W.items():
+    for key, tw in TW.items():
         p = periods.get(key)
         if not p:
             continue
-        f_sr = p.get('fund_sharpe')
-        r_sr = p.get('replica_sharpe')
-        s_sr = p.get('spy_sharpe')
+        for mk in _metric_keys:
+            v = p.get(mk)
+            if v is not None:
+                wtd_sums[mk] += tw * v
+                wtd_wts[mk]  += tw
 
-        if f_sr is not None and r_sr is not None:
-            sum_vs_rep += tw * (f_sr - r_sr)
-            tot_rep_w  += tw
-        if f_sr is not None and s_sr is not None:
-            sum_vs_spy += tw * (f_sr - s_sr)
-            tot_spy_w  += tw
+    wtd_avg = {
+        mk: (round(wtd_sums[mk] / wtd_wts[mk], 4) if wtd_wts[mk] > 0 else None)
+        for mk in _metric_keys
+    }
 
-    avg_vs_rep = sum_vs_rep / tot_rep_w if tot_rep_w > 0 else 0.0
-    avg_vs_spy = sum_vs_spy / tot_spy_w if tot_spy_w > 0 else 0.0
+    # Scoring
+    f_sr     = wtd_avg.get('fund_sharpe')
+    r_sr     = wtd_avg.get('replica_sharpe')
+    b_sr     = wtd_avg.get('bm_adj_sharpe')
+    blend_wt = cfg.GRADE_BLEND_REP_WT
 
-    composite = 0.6 * avg_vs_rep + 0.4 * avg_vs_spy
-    score = round(max(1.0, min(5.0, 3.0 + composite * 4.0)), 1)
+    if r_sr is not None and b_sr is not None:
+        blend_sr = blend_wt * r_sr + (1.0 - blend_wt) * b_sr
+    elif r_sr is not None:
+        blend_sr = r_sr
+    elif b_sr is not None:
+        blend_sr = b_sr
+    else:
+        blend_sr = None
+
+    diff  = (f_sr - blend_sr) if (f_sr is not None and blend_sr is not None) else 0.0
+    HIGH  = cfg.GRADE_HIGH_DIFF
+    LOW   = cfg.GRADE_LOW_DIFF
+
+    if diff >= HIGH:
+        score = 5.0
+    elif diff <= LOW:
+        score = 1.0
+    elif diff >= 0:
+        score = 3.0 + 2.0 * diff / HIGH
+    else:
+        score = 3.0 + 2.0 * diff / abs(LOW)
+    score = round(max(1.0, min(5.0, score)), 1)
 
     thresholds = [
-        (4.7, "A"),
-        (4.4, "A-"),
-        (4.1, "B+"),
-        (3.8, "B"),
-        (3.4, "B-"),
-        (3.1, "C+"),
-        (2.8, "C"),
-        (2.4, "C-"),
-        (2.0, "D+"),
-        (1.6, "D"),
+        (4.7, "A"), (4.4, "A-"), (4.1, "B+"), (3.8, "B"),
+        (3.4, "B-"), (3.1, "C+"), (2.8, "C"), (2.4, "C-"),
+        (2.0, "D+"), (1.6, "D"),
     ]
     grade = "F"
     for t, g in thresholds:
@@ -150,7 +202,12 @@ def _fund_grade(periods: dict) -> dict:
             grade = g
             break
 
-    return {"score": score, "grade": grade}
+    return {
+        "score":   score,
+        "grade":   grade,
+        "desc":    _grade_description(f_sr, r_sr, b_sr, bm_label),
+        "wtd_avg": wtd_avg,
+    }
 
 
 def _replica_er(weights: dict) -> float:
@@ -256,6 +313,15 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
 
     etf_ret = _get_etf_returns()
 
+    # Derive metadata early — needed for category-based benchmark selection below
+    if ticker in cfg.ACTIVE_MUTUAL_FUNDS:
+        meta = cfg.ACTIVE_MUTUAL_FUNDS[ticker]
+    elif ticker in cfg.ACTIVE_ETFS:
+        desc = cfg.ACTIVE_ETFS[ticker]
+        meta = {"name": desc.split("(")[0].strip(), "er": 0.0075, "stars": None, "category": "Active ETF"}
+    else:
+        meta = {"name": ticker, "er": None, "stars": None, "category": ""}
+
     # Load fund returns
     if ticker in cfg.ACTIVE_ETFS:
         raw      = load_etf_returns([ticker], start=cfg.DEFAULT_START, end=cfg.DEFAULT_END)
@@ -299,9 +365,13 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # Fund vol needed for benchmark selection and vol-adjustment below
     std_f_full = float(roll_fund.std() * np.sqrt(12))
 
-    # Benchmark series (SPY, QQQ) over the same OOS window as roll_fund
+    # Determine the category-appropriate benchmark (used when no bm_override given)
+    _cat_bm = cfg.CATEGORY_BM_MAP.get(meta.get("category", ""), "") if not bm_override else ""
+
+    # Load benchmark series into dict. Always include SPY and QQQ; also pre-load
+    # the category benchmark so it's available for the auto-select below.
     benchmarks: dict[str, pd.Series] = {}
-    for _bmt in ["SPY", "QQQ"]:
+    for _bmt in {"SPY", "QQQ", _cat_bm} - {""}:
         if _bmt in etf_aligned.columns:
             _bm_s = etf_aligned[_bmt].reindex(roll_fund.index)
             if _bm_s.notna().all():
@@ -331,9 +401,9 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
             except Exception:
                 bm_label = "SPY"
 
-    # Select primary benchmark (SPY vs QQQ auto, or custom) and build the
-    # vol-adjusted version BEFORE trailing-period computation so bm_adj stats
-    # are included in every period row automatically (via _trailing's benchmarks loop).
+    # Select primary benchmark: explicit override > category map > vol-based auto (SPY/QQQ).
+    # Category map ensures mid-cap, small-cap, and international funds are compared
+    # against a style-matched benchmark rather than penalised vs SPY.
     bm_oos         = None
     bm_oos_chart   = None
     bm_label_chart = bm_label
@@ -342,6 +412,10 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     if "SPY" in benchmarks:
         if bm_override:
             bm_oos = benchmarks["SPY"]
+        elif _cat_bm and _cat_bm in benchmarks:
+            bm_oos   = benchmarks[_cat_bm]
+            bm_label = _cat_bm
+            benchmarks["SPY"] = benchmarks[_cat_bm]
         else:
             qqq_std  = (float(benchmarks["QQQ"].std() * np.sqrt(12))
                         if "QQQ" in benchmarks else 999.0)
@@ -415,15 +489,12 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     fund_er    = cfg.ACTIVE_MUTUAL_FUNDS.get(ticker, {}).get("er") or 0.0075
     fee_saving = round(fund_er - rep_er, 4)
 
-    # Config metadata
-    if ticker in cfg.ACTIVE_MUTUAL_FUNDS:
-        meta = cfg.ACTIVE_MUTUAL_FUNDS[ticker]
-    else:
-        desc = cfg.ACTIVE_ETFS.get(ticker, ticker)
-        meta = {"name": desc.split("(")[0].strip(), "er": 0.0075, "stars": None, "category": "Active ETF"}
-
     # Fund grade — multi-period weighted (all periods passed, function handles NaNs)
-    grade = _fund_grade(periods)
+    grade = _fund_grade(periods, bm_label)
+    # Move weighted-average row into periods so the frontend table can render it
+    wtd_avg = grade.pop("wtd_avg", None)
+    if wtd_avg:
+        periods["wtd_avg"] = wtd_avg
 
     # Monthly OOS returns — used by frontend to compute rolling trailing returns
     monthly_oos = dict(

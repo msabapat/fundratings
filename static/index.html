@@ -214,6 +214,8 @@ td {
 td:first-child { text-align: left; font-weight: 600; color: #3d4f63; }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: rgba(47,95,212,0.02) !important; }
+tr.wtd-row td { background: #f0f4ff; font-style: italic; border-top: 2px solid #c7d4ee; }
+tr.wtd-row:hover td { background: #e8eeff !important; }
 
 /* column group shading — data cells */
 td.col-fund { background: rgba(47,  95, 212, 0.042); }
@@ -348,12 +350,14 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
     <div class="info-grid">
       <div class="info-card">
         <h3>Profile</h3>
-        <div class="info-row"><span class="info-label">Fund family</span>  <span class="info-val" id="iFundFamily">—</span></div>
-        <div class="info-row"><span class="info-label">Category</span>     <span class="info-val" id="iCategory">—</span></div>
-        <div class="info-row"><span class="info-label">Inception</span>    <span class="info-val" id="iInception">—</span></div>
-        <div class="info-row"><span class="info-label">AUM</span>          <span class="info-val" id="iAum">—</span></div>
-        <div class="info-row"><span class="info-label">Expense ratio</span><span class="info-val" id="iEr">—</span></div>
-        <div class="info-row"><span class="info-label">Morningstar risk</span><span class="info-val" id="iRisk">—</span></div>
+        <div class="info-row"><span class="info-label">Full name</span>         <span class="info-val" id="iLongName">—</span></div>
+        <div class="info-row"><span class="info-label">Fund family</span>        <span class="info-val" id="iFundFamily">—</span></div>
+        <div class="info-row"><span class="info-label">Category</span>           <span class="info-val" id="iCategory">—</span></div>
+        <div class="info-row"><span class="info-label">Inception</span>          <span class="info-val" id="iInception">—</span></div>
+        <div class="info-row"><span class="info-label">AUM</span>                <span class="info-val" id="iAum">—</span></div>
+        <div class="info-row"><span class="info-label">Expense ratio</span>      <span class="info-val" id="iEr">—</span></div>
+        <div class="info-row"><span class="info-label">Morningstar rating</span> <span class="info-val" id="iMsOverall">—</span></div>
+        <div class="info-row"><span class="info-label">Morningstar risk</span>   <span class="info-val" id="iRisk">—</span></div>
       </div>
       <div class="info-card">
         <h3>Fund Objective</h3>
@@ -380,7 +384,7 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
     </div>
 
     <!-- Fund Grade -->
-    <div class="section-title">Fund Grade</div>
+    <div class="section-title">A New Approach to Fund Ratings</div>
     <div class="grade-card" id="gradeCard">
       <div class="grade-circle" id="gradeCircle">
         <span class="grade-letter" id="gradeLetter">—</span>
@@ -391,9 +395,9 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
         <div class="grade-score-line">Score: <strong id="gradeScoreMain">—</strong> / 5</div>
         <div class="grade-desc" id="gradeDesc">—</div>
         <div class="grade-method">
-          60% weight: risk-adj vs replica &bull; 40% weight: risk-adj vs <span class="js-bm-label">SPY</span>.
-          Period weights: Full 30%, 10yr 25%, 5yr 15%, 3yr 15%, 1yr 15%.
-          3.0&nbsp;/&nbsp;5 = C — fund matches both replica and <span class="js-bm-label">SPY</span> on a risk-adj basis.
+          Score based on weighted-avg Sharpe: fund vs 50/50 blend of replica &amp; risk-adj <span class="js-bm-label">SPY</span>.
+          Period weights: 10yr 35%, Full 20%, 5yr 15%, 3yr 15%, 1yr 15%.
+          5.0 = outperforms blend by &ge;+0.10 Sharpe &bull; 3.0 = matches &bull; 1.0 = trails by &ge;0.10.
           A (&ge;4.7) &rarr; A&minus; (4.4) &rarr; B+ (4.1) &rarr; B (3.8) &rarr; B&minus; (3.4) &rarr;
           C+ (3.1) &rarr; C (2.8) &rarr; C&minus; (2.4) &rarr; D+ (2.0) &rarr; D (1.6) &rarr; F (&lt;1.6).
         </div>
@@ -459,8 +463,8 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
         <div class="period-btns" id="chartPeriodBtns">
           <button class="period-btn" data-period="3y" onclick="applyChartPeriod('3y')">3Y</button>
           <button class="period-btn" data-period="5y" onclick="applyChartPeriod('5y')">5Y</button>
-          <button class="period-btn" data-period="10y" onclick="applyChartPeriod('10y')">10Y</button>
-          <button class="period-btn active" data-period="all" onclick="applyChartPeriod('all')">All</button>
+          <button class="period-btn active" data-period="10y" onclick="applyChartPeriod('10y')">10Y</button>
+          <button class="period-btn" data-period="all" onclick="applyChartPeriod('all')">All</button>
         </div>
         <button class="is-toggle-btn" id="isToggleBtn" onclick="toggleIsReplica()">Show IS Replica</button>
       </div>
@@ -510,6 +514,33 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
       </div>
     </div>
 
+    <!-- Charts row 3: rolling vol + correlation -->
+    <div class="charts-grid" style="grid-template-columns:1fr 1fr; margin-top:4px">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-header-title">Trailing Volatility (Ann.)</div>
+            <div class="chart-header-note">Rolling std dev annualised</div>
+          </div>
+          <select id="volCorrWindow">
+            <option value="12">12-month</option>
+            <option value="24" selected>24-month</option>
+            <option value="36">36-month</option>
+          </select>
+        </div>
+        <canvas id="rollVolChart"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header">
+          <div>
+            <div class="chart-header-title">Trailing Correlation</div>
+            <div class="chart-header-note">Fund vs replica &amp; benchmark</div>
+          </div>
+        </div>
+        <canvas id="rollCorrChart"></canvas>
+      </div>
+    </div>
+
   </div><!-- /dashboard -->
 </main>
 
@@ -517,6 +548,7 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
 // ── State ──────────────────────────────────────────────────────────────────────
 let cumChartInst = null, wgtChartInst = null;
 let rollRetChartInst = null, rollWgtChartInst = null;
+let rollVolChartInst = null, rollCorrChartInst = null;
 let _monthlyOOS   = null;
 let _cumData      = null;
 let _showIsReplica = false;
@@ -545,7 +577,7 @@ function _applyBmLabel(label, bm_w) {
   }
 }
 
-let _chartPeriod = 'all';
+let _chartPeriod = '10y';
 
 function applyChartPeriod(period) {
   _chartPeriod = period;
@@ -617,17 +649,20 @@ function setChips(d) {
 // ── Fund info panel ─────────────────────────────────────────────────────────────
 async function loadFundInfo(ticker) {
   document.getElementById('fundDesc').textContent = 'Loading…';
-  ['iFundFamily','iCategory','iInception','iAum','iEr','iRisk'].forEach(id => {
+  ['iLongName','iFundFamily','iCategory','iInception','iAum','iEr','iMsOverall','iRisk'].forEach(id => {
     document.getElementById(id).textContent = '—';
   });
   try {
     const info = await fetch(`/api/fundinfo/${ticker}`).then(r => r.json());
     if (info.error) throw new Error(info.error);
+    document.getElementById('iLongName').textContent   = info.long_name    || '—';
     document.getElementById('iFundFamily').textContent = info.fund_family  || '—';
     document.getElementById('iCategory').textContent   = info.category     || '—';
     document.getElementById('iInception').textContent  = info.inception    || '—';
     document.getElementById('iAum').textContent        = info.total_assets || '—';
     document.getElementById('iEr').textContent         = info.er != null ? (info.er*100).toFixed(2)+'%' : '—';
+    const stars = info.ms_overall;
+    document.getElementById('iMsOverall').textContent  = stars ? '★'.repeat(stars) + '☆'.repeat(Math.max(0,5-stars)) : '—';
     document.getElementById('iRisk').textContent       = info.ms_risk      || '—';
     document.getElementById('fundDesc').textContent    = info.description  || 'No description available.';
     return info;
@@ -697,7 +732,7 @@ function displayGrade(grade) {
   document.getElementById('gradeLetter').textContent      = letter;
   document.getElementById('gradeScoreSmall').textContent  = score + '/5';
   document.getElementById('gradeScoreMain').textContent   = score;
-  document.getElementById('gradeDesc').textContent = (GRADE_DESCS[letter] || '').replace(/SPY/g, _bmLabel);
+  document.getElementById('gradeDesc').textContent = grade.desc || (GRADE_DESCS[letter] || '').replace(/SPY/g, _bmLabel);
 }
 
 // ── OOS note ───────────────────────────────────────────────────────────────────
@@ -717,25 +752,27 @@ function setOosNote(d) {
 }
 
 // ── Performance tables ─────────────────────────────────────────────────────────
-const LABELS = { '1y':'1 Year','3y':'3 Years','5y':'5 Years','10y':'10 Years','full':'Full OOS Period' };
+const LABELS = { '1y':'1 Year','3y':'3 Years','5y':'5 Years','10y':'10 Years','full':'Full OOS Period','wtd_avg':'Weighted Avg' };
 
 function buildTables(periods) {
   const retBody  = document.getElementById('retBody');
   const riskBody = document.getElementById('riskBody');
   retBody.innerHTML = riskBody.innerHTML = '';
 
-  ['1y','3y','5y','10y','full'].forEach(key => {
+  ['1y','3y','5y','10y','full','wtd_avg'].forEach(key => {
+    const isWtd = key === 'wtd_avg';
     const p     = periods[key];
     const label = p?.label || LABELS[key];
 
     // ── Returns table row ──────────────────────────────────────────────────────
     const retRow = document.createElement('tr');
+    if (isWtd) retRow.className = 'wtd-row';
     if (!p) {
-      retRow.innerHTML = `<td>${label}</td><td colspan="10" class="na" style="text-align:center">Insufficient history</td>`;
+      if (!isWtd) retRow.innerHTML = `<td>${label}</td><td colspan="10" class="na" style="text-align:center">Insufficient history</td>`;
     } else {
-      const dRep    = p.fund_ret - p.replica_ret;
-      const dAdj    = p.bm_adj_ret != null ? p.fund_ret - p.bm_adj_ret : null;
-      const dQqq    = p.qqq_ret    != null ? p.fund_ret - p.qqq_ret    : null;
+      const dRep    = p.fund_ret != null && p.replica_ret != null ? p.fund_ret - p.replica_ret : null;
+      const dAdj    = p.bm_adj_ret != null && p.fund_ret != null ? p.fund_ret - p.bm_adj_ret : null;
+      const dQqq    = p.qqq_ret   != null && p.fund_ret != null ? p.fund_ret - p.qqq_ret    : null;
       retRow.innerHTML = `
         <td>${label}</td>
         <td class="fund-val col-fund">${pct(p.fund_ret)}</td>
@@ -748,12 +785,13 @@ function buildTables(periods) {
         <td class="neu col-qqq">${pct(p.qqq_ret)}</td>
         <td class="${cls(dQqq)} col-qqq">${diff(dQqq)}</td>`;
     }
-    retBody.appendChild(retRow);
+    if (p || !isWtd) retBody.appendChild(retRow);
 
     // ── Risk table row ─────────────────────────────────────────────────────────
     const riskRow = document.createElement('tr');
+    if (isWtd) riskRow.className = 'wtd-row';
     if (!p) {
-      riskRow.innerHTML = `<td>${label}</td><td colspan="10" class="na" style="text-align:center">Insufficient history</td>`;
+      if (!isWtd) riskRow.innerHTML = `<td>${label}</td><td colspan="10" class="na" style="text-align:center">Insufficient history</td>`;
     } else {
       riskRow.innerHTML = `
         <td>${label}</td>
@@ -768,7 +806,7 @@ function buildTables(periods) {
         <td class="neu col-spy">${sh(p.bm_adj_sharpe)}</td>
         <td class="neu col-qqq">${sh(p.qqq_sharpe)}</td>`;
     }
-    riskBody.appendChild(riskRow);
+    if (p || !isWtd) riskBody.appendChild(riskRow);
   });
 }
 
@@ -1023,12 +1061,12 @@ async function runAnalysis(ticker) {
   document.getElementById('loadMsg').textContent       = 'Running analysis…';
   document.getElementById('metaChips').innerHTML       = '';
   _showIsReplica = false;
-  _chartPeriod   = 'all';
+  _chartPeriod   = '10y';
   document.getElementById('isToggleBtn').textContent = 'Show IS Replica';
   document.getElementById('isToggleBtn').classList.remove('active');
   document.getElementById('isNote').classList.remove('visible');
   document.querySelectorAll('.period-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.period === 'all');
+    btn.classList.toggle('active', btn.dataset.period === '10y');
   });
 
   const bmVal = document.getElementById('bmInput').value.trim().toUpperCase();
@@ -1066,9 +1104,12 @@ async function runAnalysis(ticker) {
   buildCumChart(_cumData, _chartPeriod);
   buildWgtChart(data.weights);
 
-  const rollWin = +document.getElementById('rollWindow').value;
+  const rollWin    = +document.getElementById('rollWindow').value;
+  const volCorrWin = +document.getElementById('volCorrWindow').value;
   buildRollRetChart(_monthlyOOS, rollWin);
   buildRollWgtChart(data.rolling_weights);
+  buildRollVolChart(_monthlyOOS, volCorrWin);
+  buildRollCorrChart(_monthlyOOS, volCorrWin);
 
   const fn = document.getElementById('etfFootnote');
   if (data.passive_etfs && data.passive_etfs.length) {
@@ -1082,6 +1123,108 @@ async function runAnalysis(ticker) {
   document.getElementById('dashboard').style.display = 'block';
 }
 
+// ── Rolling volatility chart ───────────────────────────────────────────────────
+function rollingStd(rets, months) {
+  return rets.map((_, i) => {
+    if (i < months - 1) return null;
+    const slice = rets.slice(i - months + 1, i + 1);
+    const mean  = slice.reduce((s, v) => s + v, 0) / slice.length;
+    const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / (slice.length - 1);
+    return +(Math.sqrt(variance) * Math.sqrt(12)).toFixed(5);
+  });
+}
+
+function rollingCorr(rets1, rets2, months) {
+  return rets1.map((_, i) => {
+    if (i < months - 1) return null;
+    const a = rets1.slice(i - months + 1, i + 1);
+    const b = rets2.slice(i - months + 1, i + 1);
+    const n = a.length;
+    const ma = a.reduce((s, v) => s + v, 0) / n;
+    const mb = b.reduce((s, v) => s + v, 0) / n;
+    let cov = 0, va = 0, vb = 0;
+    for (let j = 0; j < n; j++) {
+      cov += (a[j] - ma) * (b[j] - mb);
+      va  += (a[j] - ma) ** 2;
+      vb  += (b[j] - mb) ** 2;
+    }
+    const denom = Math.sqrt(va * vb);
+    return denom > 0 ? +(cov / denom).toFixed(4) : null;
+  });
+}
+
+function buildRollVolChart(monthlyOOS, months) {
+  if (rollVolChartInst) { rollVolChartInst.destroy(); rollVolChartInst = null; }
+  const datasets = [
+    { label:'Fund',    data: rollingStd(monthlyOOS.fund, months),
+      borderColor:'#2f5fd4', borderWidth:2, pointRadius:0, fill:false, tension:0.1 },
+    { label:'Replica', data: rollingStd(monthlyOOS.replica, months),
+      borderColor:'#c2651a', borderWidth:2, pointRadius:0, fill:false, tension:0.1, borderDash:[5,3] },
+  ];
+  if (monthlyOOS.benchmark) {
+    datasets.push({
+      label: monthlyOOS.benchmark_ticker,
+      data: rollingStd(monthlyOOS.benchmark, months),
+      borderColor:'#0a9e72', borderWidth:1.5, pointRadius:0, fill:false, tension:0.1, borderDash:[3,3],
+    });
+  }
+  const ctx = document.getElementById('rollVolChart').getContext('2d');
+  rollVolChartInst = new Chart(ctx, {
+    type:'line', data:{ labels:monthlyOOS.dates, datasets },
+    options:{
+      responsive:true, maintainAspectRatio:true,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ position:'top', labels:{ boxWidth:14, font:{size:11} } },
+        tooltip:{ callbacks:{
+          label: c => ` ${c.dataset.label}: ${c.parsed.y != null ? (c.parsed.y*100).toFixed(1)+'%' : '—'}`,
+        }},
+      },
+      scales:{
+        x:{ type:'time', time:{ unit:'year', displayFormats:{year:'yyyy'} },
+            grid:{color:'#edf0f7'}, ticks:{font:{size:10}, color:'#8a9ab0'} },
+        y:{ grid:{color:'#edf0f7'},
+            ticks:{font:{size:10}, color:'#8a9ab0', callback: v => (v*100).toFixed(0)+'%'} },
+      },
+    },
+  });
+}
+
+function buildRollCorrChart(monthlyOOS, months) {
+  if (rollCorrChartInst) { rollCorrChartInst.destroy(); rollCorrChartInst = null; }
+  const datasets = [
+    { label:'Fund vs Replica', data: rollingCorr(monthlyOOS.fund, monthlyOOS.replica, months),
+      borderColor:'#c2651a', borderWidth:2, pointRadius:0, fill:false, tension:0.1 },
+  ];
+  if (monthlyOOS.benchmark) {
+    datasets.push({
+      label: `Fund vs ${monthlyOOS.benchmark_ticker}`,
+      data: rollingCorr(monthlyOOS.fund, monthlyOOS.benchmark, months),
+      borderColor:'#0a9e72', borderWidth:1.5, pointRadius:0, fill:false, tension:0.1, borderDash:[3,3],
+    });
+  }
+  const ctx = document.getElementById('rollCorrChart').getContext('2d');
+  rollCorrChartInst = new Chart(ctx, {
+    type:'line', data:{ labels:monthlyOOS.dates, datasets },
+    options:{
+      responsive:true, maintainAspectRatio:true,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ position:'top', labels:{ boxWidth:14, font:{size:11} } },
+        tooltip:{ callbacks:{
+          label: c => ` ${c.dataset.label}: ${c.parsed.y != null ? c.parsed.y.toFixed(2) : '—'}`,
+        }},
+      },
+      scales:{
+        x:{ type:'time', time:{ unit:'year', displayFormats:{year:'yyyy'} },
+            grid:{color:'#edf0f7'}, ticks:{font:{size:10}, color:'#8a9ab0'} },
+        y:{ min:-1, max:1, grid:{color:'#edf0f7'},
+            ticks:{font:{size:10}, color:'#8a9ab0', callback: v => v.toFixed(1)} },
+      },
+    },
+  });
+}
+
 // ── Event listeners ────────────────────────────────────────────────────────────
 document.getElementById('fundSelect').addEventListener('change', e => {
   if (e.target.value) runAnalysis(e.target.value);
@@ -1089,6 +1232,14 @@ document.getElementById('fundSelect').addEventListener('change', e => {
 
 document.getElementById('rollWindow').addEventListener('change', e => {
   if (_monthlyOOS) buildRollRetChart(_monthlyOOS, +e.target.value);
+});
+
+document.getElementById('volCorrWindow').addEventListener('change', e => {
+  if (_monthlyOOS) {
+    const m = +e.target.value;
+    buildRollVolChart(_monthlyOOS, m);
+    buildRollCorrChart(_monthlyOOS, m);
+  }
 });
 
 function analyzeFromInput() {
