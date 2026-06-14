@@ -8,8 +8,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DB_PATH      = Path(__file__).parent.parent / "backtester.duckdb"
-PARQUET_PATH = Path(__file__).parent / "etf_returns.parquet"
+DB_PATH             = Path(__file__).parent.parent / "backtester.duckdb"
+PARQUET_PATH        = Path(__file__).parent / "etf_returns.parquet"
+FUND_PARQUET_PATH   = Path(__file__).parent / "fund_returns.parquet"
+TBILL_PARQUET_PATH  = Path(__file__).parent / "tbill_returns.parquet"
 
 
 def _eom_prices_from_db(tickers: list[str], start: str, end: str) -> pd.DataFrame:
@@ -63,37 +65,68 @@ def load_etf_returns(
     return df.sort_index()
 
 
+def load_tbill_monthly() -> pd.Series:
+    """
+    Monthly 3-month T-bill rate as a decimal (annualised ÷ 100 ÷ 12).
+    Reads from tbill_returns.parquet if present, otherwise fetches from yfinance.
+    """
+    if TBILL_PARQUET_PATH.exists():
+        df = pd.read_parquet(TBILL_PARQUET_PATH)
+        return df["tbill"]
+
+    import yfinance as yf
+    hist = yf.Ticker("^IRX").history(start="2000-01-01", auto_adjust=False)
+    hist.index = hist.index.tz_localize(None)
+    s = (hist["Close"] / 100 / 12).resample("ME").last()
+    return s.rename("tbill")
+
+
 def load_fund_returns(
     tickers: list[str],
     start: str = "2005-01-01",
     end:   str = "2025-12-31",
 ) -> pd.DataFrame:
     """
-    Monthly total returns for mutual funds from yfinance (dividend-adjusted NAV).
+    Monthly total returns for mutual funds/ETFs (dividend-adjusted NAV).
+    Reads from fund_returns.parquet where available; falls back to yfinance
+    for missing tickers (e.g. custom benchmark overrides).
     Returns a DataFrame indexed by month-end date, columns = ticker symbols.
     """
-    import yfinance as yf
-
     frames: dict[str, pd.Series] = {}
-    for t in tickers:
-        try:
-            hist = yf.Ticker(t).history(
-                start=start, end=end, auto_adjust=True
-            )
-            if len(hist) < 24:
-                warnings.warn(f"{t}: only {len(hist)} daily rows — skipping", stacklevel=2)
-                continue
-            monthly = hist["Close"].resample("ME").last()
-            monthly.index = (monthly.index + pd.offsets.MonthEnd(0)).tz_localize(None)
-            frames[t] = monthly.pct_change().rename(t)
-        except Exception as exc:
-            warnings.warn(f"{t}: yfinance error — {exc}", stacklevel=2)
+    need_yfinance: list[str] = []
+
+    if FUND_PARQUET_PATH.exists():
+        pq = pd.read_parquet(FUND_PARQUET_PATH)
+        for t in tickers:
+            if t in pq.columns:
+                s = pq[t].loc[start:end].dropna()
+                if len(s) >= 12:
+                    frames[t] = s.rename(t)
+                else:
+                    need_yfinance.append(t)
+            else:
+                need_yfinance.append(t)
+    else:
+        need_yfinance = list(tickers)
+
+    if need_yfinance:
+        import yfinance as yf
+        for t in need_yfinance:
+            try:
+                hist = yf.Ticker(t).history(start=start, end=end, auto_adjust=True)
+                if len(hist) < 24:
+                    warnings.warn(f"{t}: only {len(hist)} daily rows — skipping", stacklevel=2)
+                    continue
+                monthly = hist["Close"].resample("ME").last()
+                monthly.index = (monthly.index + pd.offsets.MonthEnd(0)).tz_localize(None)
+                frames[t] = monthly.pct_change().rename(t).iloc[1:].loc[start:end]
+            except Exception as exc:
+                warnings.warn(f"{t}: yfinance error — {exc}", stacklevel=2)
 
     if not frames:
-        raise ValueError("No fund data loaded from yfinance")
+        raise ValueError("No fund data loaded")
 
     result = pd.DataFrame(frames).sort_index()
-    result = result.iloc[1:]
     return result
 
 

@@ -4,7 +4,7 @@
 # Run:  py app.py
 # Then open http://localhost:5050
 
-import os, sys, warnings, threading
+import json, os, sys, warnings, threading
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
@@ -15,10 +15,11 @@ import pandas as pd
 from flask import Flask, jsonify, request, send_from_directory, abort
 
 import config as cfg
-from data     import load_etf_returns, load_fund_returns, align
+from data     import load_etf_returns, load_fund_returns, load_tbill_monthly, align
 from analysis import constrained_ols, rolling_replication
 
 app = Flask(__name__, static_folder="static")
+ANALYSIS_CACHE_PATH = Path(__file__).parent / "analysis_cache.json"
 
 # ── Module-level cache ────────────────────────────────────────────────────────
 _etf_returns: pd.DataFrame | None = None
@@ -31,10 +32,7 @@ _tbill_lock  = threading.Lock()
 
 
 def _get_tbill_monthly() -> pd.Series:
-    """
-    Monthly 3-month T-bill rate as a decimal (not annualised). Cached per session.
-    Source: ^IRX (13-week T-bill yield) from yfinance.
-    """
+    """Monthly T-bill rate as a decimal. Reads from Parquet; falls back to yfinance."""
     global _tbill_cache
     if _tbill_cache is not None:
         return _tbill_cache
@@ -42,12 +40,7 @@ def _get_tbill_monthly() -> pd.Series:
         if _tbill_cache is not None:
             return _tbill_cache
         try:
-            import yfinance as yf
-            hist = yf.Ticker("^IRX").history(start="2000-01-01", auto_adjust=False)
-            hist.index = hist.index.tz_localize(None)
-            # ^IRX is an annualised percentage; monthly decimal = value / 100 / 12
-            s = (hist["Close"] / 100 / 12).resample("ME").last()
-            _tbill_cache = s.rename("tbill")
+            _tbill_cache = load_tbill_monthly()
         except Exception:
             _tbill_cache = pd.Series(dtype=float, name="tbill")
     return _tbill_cache
@@ -252,30 +245,28 @@ def fund_info(ticker: str):
         return jsonify({"error": str(exc)}), 400
 
 
-@app.route("/api/analyze/<ticker>")
-def analyze(ticker: str):
-    ticker      = ticker.upper()
-    bm_override = request.args.get("benchmark", "").upper().strip()
-    cache_key   = f"{ticker}|{bm_override}"
+def _run_analysis(ticker: str, bm_override: str = "") -> dict:
+    """
+    Core analysis logic, extracted so the pre-computation script can call it directly
+    without going through Flask. Results are stored in _fund_cache.
+    """
+    cache_key = f"{ticker}|{bm_override}"
     if cache_key in _fund_cache:
-        return jsonify(_fund_cache[cache_key])
+        return _fund_cache[cache_key]
 
     etf_ret = _get_etf_returns()
 
     # Load fund returns
-    try:
-        if ticker in cfg.ACTIVE_ETFS:
-            raw      = load_etf_returns([ticker], start=cfg.DEFAULT_START, end=cfg.DEFAULT_END)
-            if ticker not in raw.columns:
-                abort(404, f"{ticker} not found in DB")
-            fund_raw = raw[ticker].dropna()
-        else:
-            raw      = load_fund_returns([ticker], start=cfg.DEFAULT_START, end=cfg.DEFAULT_END)
-            if ticker not in raw.columns:
-                abort(404, f"{ticker} not found via yfinance")
-            fund_raw = raw[ticker].dropna()
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 400
+    if ticker in cfg.ACTIVE_ETFS:
+        raw      = load_etf_returns([ticker], start=cfg.DEFAULT_START, end=cfg.DEFAULT_END)
+        if ticker not in raw.columns:
+            raise ValueError(f"{ticker} not found in DB")
+        fund_raw = raw[ticker].dropna()
+    else:
+        raw      = load_fund_returns([ticker], start=cfg.DEFAULT_START, end=cfg.DEFAULT_END)
+        if ticker not in raw.columns:
+            raise ValueError(f"{ticker} not found via yfinance")
+        fund_raw = raw[ticker].dropna()
 
     fund_ret, etf_aligned = align(fund_raw, etf_ret)
 
@@ -357,6 +348,8 @@ def analyze(ticker: str):
             if std_f_full >= qqq_std:
                 bm_oos   = benchmarks["QQQ"]
                 bm_label = "QQQ"
+                # Make spy_ret slot hold QQQ data so the primary-bm column is correct
+                benchmarks["SPY"] = benchmarks["QQQ"]
             else:
                 bm_oos = benchmarks["SPY"]
 
@@ -495,7 +488,30 @@ def analyze(ticker: str):
     )
 
     _fund_cache[cache_key] = result
-    return jsonify(result)
+    return result
+
+
+@app.route("/api/analyze/<ticker>")
+def analyze(ticker: str):
+    ticker      = ticker.upper()
+    bm_override = request.args.get("benchmark", "").upper().strip()
+    try:
+        return jsonify(_run_analysis(ticker, bm_override))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+def _load_analysis_cache() -> None:
+    """Load pre-computed analysis results into _fund_cache at startup."""
+    if not ANALYSIS_CACHE_PATH.exists():
+        return
+    try:
+        with open(ANALYSIS_CACHE_PATH) as f:
+            loaded = json.load(f)
+        _fund_cache.update(loaded)
+        print(f"Pre-computation cache: loaded {len(loaded)} fund analyses")
+    except Exception as e:
+        warnings.warn(f"Failed to load analysis cache: {e}")
 
 
 # Pre-load ETF data and T-bill rate at import time (gunicorn workers).
@@ -503,11 +519,13 @@ def analyze(ticker: str):
 if __name__ != "__main__":
     _get_etf_returns()
     threading.Thread(target=_get_tbill_monthly, daemon=True).start()
+    _load_analysis_cache()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
     print("Pre-loading ETF returns...")
     _get_etf_returns()
     print(f"  Ready — {_etf_returns.shape[1]} ETFs loaded")
+    _load_analysis_cache()
     print(f"Starting server at http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
