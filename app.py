@@ -248,10 +248,31 @@ def _fund_grade(periods: dict, bm_label: str = "benchmark") -> dict:
         'bm_adj_ret', 'bm_adj_std', 'bm_adj_sharpe',
         'qqq_ret', 'qqq_std', 'qqq_sharpe',
     ]
+
+    # Redistribute weight from missing periods to 'full' so a fund with only
+    # 3 years of history doesn't silently drop 60% of the scoring weight.
+    eff_weights: dict[str, float] = {}
+    spill = 0.0
+    for key, tw in TW.items():
+        if periods.get(key):
+            eff_weights[key] = tw
+        else:
+            spill += tw
+    if spill > 0:
+        if "full" in eff_weights:
+            eff_weights["full"] += spill
+        else:
+            # 'full' itself is missing — spread spill across whatever is present
+            present = list(eff_weights)
+            if present:
+                per = spill / len(present)
+                for k in present:
+                    eff_weights[k] += per
+
     wtd_sums = {k: 0.0 for k in _metric_keys}
     wtd_wts  = {k: 0.0 for k in _metric_keys}
 
-    for key, tw in TW.items():
+    for key, tw in eff_weights.items():
         p = periods.get(key)
         if not p:
             continue
