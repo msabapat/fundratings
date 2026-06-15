@@ -142,11 +142,16 @@ def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> s
       ×    coverage ratio      — (years_overlap / fund_oos_years); penalises
                                  ETFs with short history that appear to fit well
                                  over fewer years
+      ×    vol cap             — min(1, MAX_BM_VOL_RATIO / vol_ratio); no penalty
+                                 below the cap, proportional penalty above it so
+                                 high-vol ETFs (TLT, CWB vs a core bond fund)
+                                 can't win purely on return coincidence
 
     Falls back to BND if no candidate reaches 5 annual observations.
     """
     roll_idx   = pd.DatetimeIndex(roll_fund.index)
     fund_years = roll_idx.year.nunique()
+    fund_vol   = float(roll_fund.std())
 
     def _ann(s: "pd.Series") -> "pd.Series":
         s = s.copy()
@@ -181,10 +186,16 @@ def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> s
         e_mo = etf_s[overlap].values
         corr = float(np.corrcoef(f_mo, e_mo)[0, 1])
 
-        # Penalise ETFs that only cover part of the fund's OOS history
+        # Coverage: penalise ETFs that only cover part of the fund's OOS history
         coverage = len(common) / max(fund_years, 1)
 
-        score = (0.70 * ret_score + 0.30 * corr) * coverage
+        # Vol cap: soft penalty when benchmark vol exceeds fund vol by more than
+        # MAX_BM_VOL_RATIO. No penalty below the cap; proportional above it.
+        etf_vol   = float(etf_s[overlap].std())
+        vol_ratio = etf_vol / fund_vol if fund_vol > 0 else 1.0
+        vol_cap   = min(1.0, cfg.MAX_BM_VOL_RATIO / vol_ratio) if vol_ratio > 0 else 1.0
+
+        score = (0.70 * ret_score + 0.30 * corr) * coverage * vol_cap
         if score > best_score:
             best_score  = score
             best_ticker = t

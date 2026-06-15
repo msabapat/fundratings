@@ -219,6 +219,9 @@ LASSO_N_ALPHAS      = 50             # number of alpha values to CV over
 # 1.1 = add 10% buffer to account for fund concentration risk.
 # Raises tracking error slightly; set to 0 to disable.
 MIN_VOL_RATIO       = 1.0
+# Soft cap on benchmark vol relative to fund vol in FI benchmark selection.
+# Scores are multiplied by min(1, MAX_BM_VOL_RATIO / vol_ratio) above the cap.
+MAX_BM_VOL_RATIO    = 1.5
 
 # ── Grade / scoring parameters ────────────────────────────────────────────────
 # Period weights for weighted-average Sharpe used in scoring (re-normalised if period unavailable)
