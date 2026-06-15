@@ -233,8 +233,8 @@ GRADE_TIME_WEIGHTS: dict[str, float] = {
     "1y":   0.05,
 }
 GRADE_BLEND_REP_WT: float = 0.50   # replica's share in the Sharpe blend (vs bm_adj)
-GRADE_HIGH_DIFF:    float =  0.10  # Sharpe diff where score reaches 5.0
-GRADE_LOW_DIFF:     float = -0.10  # Sharpe diff where score drops to 1.0
+GRADE_HIGH_DIFF:    float =  0.20  # Sharpe diff where score reaches 5.0
+GRADE_LOW_DIFF:     float = -0.20  # Sharpe diff where score drops to 1.0
 
 # ── Category → benchmark mapping ──────────────────────────────────────────────
 # Maps Morningstar category to the most appropriate passive benchmark ETF.
