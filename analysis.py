@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
-from sklearn.linear_model import LassoCV
+# scipy and sklearn are lazy-imported inside the functions that need them
+# to avoid loading ~200MB of shared libraries at startup on Railway.
 
 
 # ── Core constrained regression (Sharpe RBSA) ────────────────────────────────
@@ -43,6 +43,7 @@ def constrained_ols(
         w /= s
     except Exception:
         # SLSQP fallback — only if quadprog not installed or numerically broken
+        from scipy.optimize import minimize
         w0  = np.ones(n) / n
         res = minimize(
             lambda w: np.sum((fund_ret - etf_ret @ w) ** 2),
@@ -227,6 +228,7 @@ def lasso_selection(
     ETFs that explain fund returns. Then run constrained OLS on that subset.
     Reports selected tickers, constrained weights, and replication metrics.
     """
+    from sklearn.linear_model import LassoCV
     alphas = np.logspace(-6, 0, n_alphas)
     lasso  = LassoCV(
         alphas=alphas,
