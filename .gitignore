@@ -5,3 +5,7 @@ __pycache__/
 *.duckdb
 *.duckdb.wal
 .DS_Store
+server.log
+*.json.bak
+probe_aum.py
+fctdx.json

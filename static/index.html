@@ -306,6 +306,96 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
   padding: 10px 16px; font-size: 0.76rem; color: #0c4a6e; line-height: 1.55;
 }
 .is-note.visible { display: block; }
+
+/* ─── Browse universe ────────────────────────────────────────────── */
+#universeWrap { display: block; }
+#universeWrap.mode-sidebar { display: flex; gap: 24px; align-items: flex-start; }
+#universeWrap.mode-sidebar #browsePanel {
+  width: 380px; flex: 0 0 380px; position: sticky; top: 12px;
+  max-height: calc(100vh - 24px); overflow-y: auto;
+}
+#universeWrap.mode-sidebar #dashboardArea { flex: 1 1 auto; min-width: 0; }
+#universeWrap.mode-sidebar .browse-toolbar-row { flex-direction: column; align-items: stretch; }
+#universeWrap.mode-sidebar .browse-toolbar-row > * { width: 100%; }
+#universeWrap.mode-sidebar #layoutToggleBtn { order: -1; }
+
+#browsePanel.collapsed .browse-toolbar,
+#browsePanel.collapsed .table-card { display: none; }
+#universeWrap.mode-sidebar #browsePanel.collapsed .browse-toolbar,
+#universeWrap.mode-sidebar #browsePanel.collapsed .table-card { display: block; }
+#universeWrap.mode-sidebar .browse-toolbar-row { display: flex; }
+
+.browse-toolbar { margin-bottom: 14px; }
+.browse-toolbar-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+#browseSearch {
+  font-size: 0.85rem; padding: 8px 12px; border: 1.5px solid #bec8d8;
+  border-radius: 7px; flex: 1 1 220px; min-width: 160px;
+}
+#browseSearch:focus { outline: none; border-color: #2f5fd4; }
+#browseAssetClass, #browseMinGrade, #browseMinPeer {
+  font-size: 0.82rem; padding: 8px 10px; border: 1.5px solid #bec8d8;
+  border-radius: 7px; background: #fff; cursor: pointer;
+}
+.browse-checkbox {
+  font-size: 0.8rem; color: #5a6a7e; display: flex; align-items: center; gap: 6px;
+  white-space: nowrap; cursor: pointer;
+}
+.browse-checkbox input { cursor: pointer; }
+#layoutToggleBtn {
+  font-size: 0.8rem; font-weight: 600; padding: 8px 14px; white-space: nowrap;
+  border: 1.5px solid #2f5fd4; border-radius: 7px; background: #fff; color: #2f5fd4;
+  cursor: pointer; transition: background 0.15s;
+}
+#layoutToggleBtn:hover { background: #eef2fb; }
+#layoutToggleBtn.active { background: #2f5fd4; color: #fff; }
+.browse-count { font-size: 0.76rem; color: #7a8ea8; margin-top: 8px; }
+
+#browseTableCard {
+  background: #fff; border: 1px solid #e1e6f0; border-radius: 10px;
+  overflow: auto; max-height: 560px;
+}
+#browseTable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+#browseTable thead th {
+  position: sticky; top: 0; background: #f6f8fc; text-align: left;
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.6px;
+  color: #7a8ea8; padding: 9px 12px; border-bottom: 1.5px solid #e1e6f0;
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+#browseTable thead th:hover { color: #2f5fd4; }
+#browseTable thead th.sorted { color: #2f5fd4; }
+#browseTable tbody td {
+  padding: 8px 12px; border-bottom: 1px solid #eef1f7; vertical-align: middle;
+}
+#browseTable tbody tr.browse-row { cursor: pointer; transition: background 0.1s; }
+#browseTable tbody tr.browse-row:hover { background: #f4f7fd; }
+#browseTable tbody tr.browse-row.selected { background: #eaf0fd; }
+.bc-name { color: #1e2a3a; }
+.bc-sub  { color: #94a3b8; font-size: 0.76rem; margin-top: 1px;
+           max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+
+.grade-pill {
+  display: inline-block; min-width: 30px; text-align: center; padding: 2px 8px;
+  border-radius: 12px; font-size: 0.76rem; font-weight: 700; color: #fff;
+}
+.grade-pill.g5 { background: linear-gradient(145deg, #10b981, #0a7a50); }
+.grade-pill.g4 { background: linear-gradient(145deg, #34a25b, #15803d); }
+.grade-pill.g3 { background: linear-gradient(145deg, #3b82f6, #1d4ed8); }
+.grade-pill.g2 { background: linear-gradient(145deg, #f59e0b, #b45309); }
+.grade-pill.g1 { background: linear-gradient(145deg, #ef4444, #b91c1c); }
+.grade-pill.gna { background: #94a3b8; }
+
+#browseSummaryBar {
+  display: none; align-items: center; gap: 14px; margin-bottom: 16px;
+  background: #fff; border: 1px solid #e1e6f0; border-radius: 8px; padding: 10px 16px;
+  font-size: 0.85rem; color: #5a6a7e;
+}
+#browseSummaryBar.visible { display: flex; }
+#backToBrowseBtn {
+  font-size: 0.8rem; font-weight: 600; padding: 6px 14px; white-space: nowrap;
+  border: 1.5px solid #2f5fd4; border-radius: 7px; background: #fff; color: #2f5fd4; cursor: pointer;
+}
+#backToBrowseBtn:hover { background: #eef2fb; }
 </style>
 </head>
 <body>
@@ -331,11 +421,56 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
 </div>
 
 <main>
+<div id="universeWrap" class="mode-stacked">
+
+  <section id="browsePanel">
+    <div class="browse-toolbar">
+      <div class="browse-toolbar-row">
+        <input type="text" id="browseSearch" placeholder="Search ticker, name, or family…" autocomplete="off" />
+        <select id="browseAssetClass">
+          <option value="">All asset classes</option>
+          <option value="Equity">Equity</option>
+          <option value="Fixed Income">Fixed Income</option>
+          <option value="Allocation">Allocation</option>
+          <option value="Alternative">Alternative</option>
+        </select>
+        <select id="browseMinGrade">
+          <option value="0">Any grade</option>
+          <option value="4">Grade &ge; 4</option>
+          <option value="3">Grade &ge; 3</option>
+          <option value="2">Grade &ge; 2</option>
+        </select>
+        <select id="browseMinPeer">
+          <option value="0">Any peer rank</option>
+          <option value="90">Top 10% of peers</option>
+          <option value="75">Top 25% of peers</option>
+          <option value="50">Top 50% of peers</option>
+        </select>
+        <label class="browse-checkbox"><input type="checkbox" id="browseIncludePassive" /> Include passive index funds</label>
+        <button id="layoutToggleBtn" type="button" title="Switch between drill-down and sidebar layout">&#8644; Sidebar view</button>
+      </div>
+      <div class="browse-count" id="browseCount">Loading fund universe&hellip;</div>
+    </div>
+    <div class="table-card" id="browseTableCard">
+      <table id="browseTable">
+        <thead id="browseTableHead"></thead>
+        <tbody id="browseTableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="dashboardArea">
+
+  <div id="browseSummaryBar">
+    <button id="backToBrowseBtn" type="button">&larr; Back to full browse table</button>
+    <span id="browseSummaryText"></span>
+  </div>
+
   <div id="placeholder">
     <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
       <path d="M3 3v18h18M7 16l4-4 4 4 4-8"/>
     </svg>
-    <p>Select a fund above to run the replication analysis</p>
+    <p>Select a fund above, or browse the universe table to find one</p>
   </div>
 
   <div id="loading">
@@ -484,7 +619,7 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
 
     <div class="charts-grid">
       <div class="chart-card">
-        <h3>Cumulative Return &mdash; Fund vs Replica (Out-of-Sample)</h3>
+        <h3 id="cumChartTitle">Cumulative Return &mdash; Fund vs Replica (Out-of-Sample)</h3>
         <canvas id="cumChart"></canvas>
       </div>
       <div class="chart-card">
@@ -546,6 +681,10 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
     </div>
 
   </div><!-- /dashboard -->
+
+  </section><!-- /dashboardArea -->
+
+</div><!-- /universeWrap -->
 </main>
 
 <script>
@@ -555,6 +694,7 @@ let rollRetChartInst = null, rollWgtChartInst = null;
 let rollVolChartInst = null, rollCorrChartInst = null;
 let _monthlyOOS   = null;
 let _cumData      = null;
+let _cumDataFull  = null;
 let _showIsReplica = false;
 let _bmLabel = 'SPY';
 
@@ -588,6 +728,17 @@ function applyChartPeriod(period) {
   document.querySelectorAll('.period-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.period === period);
   });
+
+  // "All" shows the full pre-OOS history too, where the only replica available is the
+  // static IS fit — auto-show it so that stretch of the chart isn't blank.
+  if (period === 'all' && _cumDataFull && !_showIsReplica) {
+    _showIsReplica = true;
+    const btn  = document.getElementById('isToggleBtn');
+    const note = document.getElementById('isNote');
+    btn.textContent = 'Hide IS Replica';
+    btn.classList.add('active');
+    note.classList.add('visible');
+  }
 
   // Cumulative chart: rebuild with rebased data so it always starts at 1.0
   if (_cumData) buildCumChart(_cumData, period);
@@ -757,14 +908,14 @@ function setOosNote(d) {
 }
 
 // ── Performance tables ─────────────────────────────────────────────────────────
-const LABELS = { '1y':'1 Year','3y':'3 Years','5y':'5 Years','10y':'10 Years','full':'Full OOS Period','wtd_avg':'Weighted Avg' };
+const LABELS = { '1y':'1 Year','3y':'3 Years','5y':'5 Years','10y':'10 Years','full':'Full OOS Period','full_hist':'Full History','wtd_avg':'Weighted Avg' };
 
 function buildTables(periods) {
   const retBody  = document.getElementById('retBody');
   const riskBody = document.getElementById('riskBody');
   retBody.innerHTML = riskBody.innerHTML = '';
 
-  ['1y','3y','5y','10y','full','wtd_avg'].forEach(key => {
+  ['1y','3y','5y','10y','full','full_hist','wtd_avg'].forEach(key => {
     const isWtd = key === 'wtd_avg';
     const p     = periods[key];
     const label = p?.label || LABELS[key];
@@ -943,6 +1094,64 @@ function buildRollWgtChart(rw) {
 function buildCumChart(cum, period) {
   if (cumChartInst) { cumChartInst.destroy(); cumChartInst = null; }
 
+  const titleEl = document.getElementById('cumChartTitle');
+  const useFull = period === 'all' && _cumDataFull;
+
+  if (useFull) {
+    // Full history from inception: Fund / Risk-Adj Benchmark / IS Replica span the
+    // whole period; the rolling-OOS replica only appears once training completes,
+    // and is pre-rescaled by the backend so it overlays continuously (no reset to 1.0).
+    if (titleEl) titleEl.innerHTML = 'Cumulative Return &mdash; Fund vs Replica (Full History)';
+
+    const full = _cumDataFull;
+    const datasets = [
+      { label:'Fund', data:full.fund, borderColor:'#2f5fd4',
+        backgroundColor:'rgba(47,95,212,0.04)', borderWidth:2,
+        pointRadius:0, fill:false, tension:0.1 },
+      { label:'Replica (OOS)', data:full.replica_oos, borderColor:'#c2651a',
+        backgroundColor:'rgba(194,101,26,0.04)', borderWidth:2,
+        pointRadius:0, fill:false, tension:0.1, borderDash:[5,3], spanGaps:false },
+    ];
+    if (full.benchmark) {
+      datasets.push({
+        label: full.benchmark_ticker, data: full.benchmark,
+        borderColor:'#0a9e72', backgroundColor:'rgba(10,158,114,0.03)',
+        borderWidth:1.5, pointRadius:0, fill:false, tension:0.1, borderDash:[3,3],
+      });
+    }
+    if (full.replica_is) {
+      datasets.push({
+        label: 'IS Replica', data: full.replica_is,
+        borderColor:'#0891b2', backgroundColor:'rgba(8,145,178,0.03)',
+        borderWidth:2, pointRadius:0, fill:false, tension:0.1, borderDash:[8,4],
+        hidden: !_showIsReplica,
+      });
+    }
+
+    const ctx = document.getElementById('cumChart').getContext('2d');
+    cumChartInst = new Chart(ctx, {
+      type: 'line',
+      data: { labels: full.dates, datasets },
+      options: {
+        responsive:true, maintainAspectRatio:true,
+        interaction:{ mode:'index', intersect:false },
+        plugins:{
+          legend:{ position:'top', labels:{ boxWidth:14, font:{size:11} } },
+          tooltip:{ callbacks:{ label: c => ` ${c.dataset.label}: ${c.parsed.y == null ? '—' : c.parsed.y.toFixed(2) + 'x'}` } },
+        },
+        scales:{
+          x:{ type:'time', time:{ unit:'year', displayFormats:{year:'yyyy'} },
+              grid:{color:'#edf0f7'}, ticks:{font:{size:10}, color:'#8a9ab0'} },
+          y:{ grid:{color:'#edf0f7'},
+              ticks:{font:{size:10}, color:'#8a9ab0', callback: v => v.toFixed(1) + 'x'} },
+        },
+      },
+    });
+    return;
+  }
+
+  if (titleEl) titleEl.innerHTML = 'Cumulative Return &mdash; Fund vs Replica (Out-of-Sample)';
+
   // Slice data to the selected period and rebase all series to 1.0 at the slice start
   let dates  = cum.dates;
   let fund   = cum.fund;
@@ -1104,8 +1313,9 @@ async function runAnalysis(ticker) {
   if (data.grade) displayGrade(data.grade);
   buildTables(data.periods);
 
-  _cumData    = data.cumulative;
-  _monthlyOOS = data.monthly_oos;
+  _cumData     = data.cumulative;
+  _cumDataFull = data.cumulative_full;
+  _monthlyOOS  = data.monthly_oos;
   buildCumChart(_cumData, _chartPeriod);
   buildWgtChart(data.weights);
 
@@ -1126,6 +1336,7 @@ async function runAnalysis(ticker) {
 
   document.getElementById('loading').style.display   = 'none';
   document.getElementById('dashboard').style.display = 'block';
+  _onAnalysisShown(ticker, data);
 }
 
 // ── Rolling volatility chart ───────────────────────────────────────────────────
@@ -1230,6 +1441,221 @@ function buildRollCorrChart(monthlyOOS, months) {
   });
 }
 
+// ── Browse Universe ─────────────────────────────────────────────────────────────
+let _universeData = [];
+let _filteredRows = [];
+let _browseSort   = { key: 'aum_millions', dir: 'desc' };
+let _layoutMode   = localStorage.getItem('fundReplicationLayoutMode') || 'stacked';
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function gradeClass(g) {
+  if (g == null) return 'gna';
+  return 'g' + Math.max(1, Math.min(5, Math.round(g)));
+}
+function fmtAum(v)   { return v == null ? '—' : (v >= 1000 ? `$${(v/1000).toFixed(1)}B` : `$${v.toFixed(0)}M`); }
+function fmtErPct(v) { return v != null ? (v*100).toFixed(2)+'%' : '—'; }
+function fmtPeer(v)  { return v != null ? Math.round(v)+'%' : '—'; }
+function fmtGrade(v) { return v != null ? v.toFixed(1) : '—'; }
+function fmtAlpha(v) { return v != null ? (v*100>=0?'+':'')+(v*100).toFixed(1)+'%' : '—'; }
+
+const BROWSE_COLS_FULL = [
+  { key:'ticker',          label:'Ticker' },
+  { key:'long_name',       label:'Name' },
+  { key:'asset_class',     label:'Asset Class' },
+  { key:'aum_millions',    label:'AUM',    num:true },
+  { key:'expense_ratio',   label:'ER',     num:true },
+  { key:'benchmark',       label:'Benchmark' },
+  { key:'grade',           label:'Grade',  num:true },
+  { key:'peer_percentile', label:'Peer %', num:true },
+  { key:'wtd_alpha',       label:'Alpha',  num:true },
+  { key:'wtd_info_ratio',  label:'Info Ratio', num:true },
+  { key:'wtd_beat_rate',   label:'Beat %', num:true },
+];
+const BROWSE_COLS_COMPACT = [
+  { key:'ticker',          label:'Fund' },
+  { key:'grade',           label:'Grade',  num:true },
+  { key:'peer_percentile', label:'Peer %', num:true },
+];
+
+async function fetchUniverse() {
+  try {
+    _universeData = await fetch('/api/universe').then(r => r.json());
+  } catch (e) {
+    _universeData = [];
+  }
+  applyBrowseFilters();
+}
+
+function applyBrowseFilters() {
+  const search         = document.getElementById('browseSearch').value.trim().toLowerCase();
+  const ac             = document.getElementById('browseAssetClass').value;
+  const minGrade       = +document.getElementById('browseMinGrade').value;
+  const minPeer        = +document.getElementById('browseMinPeer').value;
+  const includePassive = document.getElementById('browseIncludePassive').checked;
+
+  let rows = _universeData.filter(r => {
+    if (!includePassive && r.is_active === false) return false;
+    if (ac && r.asset_class !== ac) return false;
+    if (minGrade && !(r.grade >= minGrade)) return false;
+    if (minPeer && !(r.peer_percentile >= minPeer)) return false;
+    if (search) {
+      const hay = `${r.ticker} ${r.long_name||''} ${r.fund_family||''}`.toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const { key, dir } = _browseSort;
+  rows.sort((a, b) => {
+    let av = a[key], bv = b[key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
+    if (av < bv) return dir === 'asc' ? -1 : 1;
+    if (av > bv) return dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  _filteredRows = rows;
+  document.getElementById('browseCount').textContent =
+    `Showing ${rows.length.toLocaleString()} of ${_universeData.length.toLocaleString()} analysed funds`;
+  renderBrowseTable(rows);
+}
+
+function renderBrowseTable(rows) {
+  const compact = _layoutMode === 'sidebar';
+  const cols = compact ? BROWSE_COLS_COMPACT : BROWSE_COLS_FULL;
+
+  const thead = document.getElementById('browseTableHead');
+  thead.innerHTML = '<tr>' + cols.map(c => {
+    const sorted = _browseSort.key === c.key;
+    const arrow  = sorted ? (_browseSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th data-key="${c.key}" class="${sorted ? 'sorted' : ''}">${esc(c.label)}${arrow}</th>`;
+  }).join('') + '</tr>';
+
+  const tbody = document.getElementById('browseTableBody');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${cols.length}" style="text-align:center;color:#94a3b8;padding:24px;">No funds match these filters</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const gradeCell = `<span class="grade-pill ${gradeClass(r.grade)}">${fmtGrade(r.grade)}</span>`;
+    if (compact) {
+      return `<tr class="browse-row" data-ticker="${esc(r.ticker)}">
+        <td><div class="bc-name">${esc(r.ticker)}</div><div class="bc-sub">${esc(r.long_name)}</div></td>
+        <td class="num-cell">${gradeCell}</td>
+        <td class="num-cell">${fmtPeer(r.peer_percentile)}</td>
+      </tr>`;
+    }
+    return `<tr class="browse-row" data-ticker="${esc(r.ticker)}">
+      <td><b>${esc(r.ticker)}</b></td>
+      <td><div class="bc-name">${esc(r.long_name)}</div><div class="bc-sub">${esc(r.fund_family)}</div></td>
+      <td>${esc(r.asset_class) || '—'}</td>
+      <td class="num-cell">${fmtAum(r.aum_millions)}</td>
+      <td class="num-cell">${fmtErPct(r.expense_ratio)}</td>
+      <td>${esc(r.benchmark) || '—'}</td>
+      <td class="num-cell">${gradeCell}</td>
+      <td class="num-cell">${fmtPeer(r.peer_percentile)}</td>
+      <td class="num-cell">${fmtAlpha(r.wtd_alpha)}</td>
+      <td class="num-cell">${r.wtd_info_ratio != null ? r.wtd_info_ratio.toFixed(2) : '—'}</td>
+      <td class="num-cell">${r.wtd_beat_rate != null ? Math.round(r.wtd_beat_rate*100)+'%' : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function selectUniverseFund(ticker) {
+  const row = _universeData.find(r => r.ticker === ticker);
+  document.getElementById('fundSelect').value = '';
+  document.getElementById('tickerInput').value = ticker;
+  document.getElementById('bmInput').value = (row && row.benchmark) ? row.benchmark : '';
+  runAnalysis(ticker);
+}
+
+function _onAnalysisShown(ticker, data) {
+  const row = _universeData.find(r => r.ticker === ticker);
+  const nameTxt = data.name || ticker;
+  let html = `Showing <b>${esc(ticker)}</b> &mdash; ${esc(nameTxt)}`;
+  if (row && row.grade != null) {
+    html += ` &nbsp;|&nbsp; Screen grade: <span class="grade-pill ${gradeClass(row.grade)}">${fmtGrade(row.grade)}</span>`;
+    if (row.peer_percentile != null) html += ` &nbsp;(top ${100 - Math.round(row.peer_percentile)}% of ${esc(row.asset_class)} peers)`;
+  }
+  document.getElementById('browseSummaryText').innerHTML = html;
+  document.getElementById('browseSummaryBar').classList.add('visible');
+
+  document.querySelectorAll('#browseTableBody tr.selected').forEach(tr => tr.classList.remove('selected'));
+  const tr = document.querySelector(`#browseTableBody tr[data-ticker="${ticker}"]`);
+  if (tr) tr.classList.add('selected');
+
+  if (_layoutMode === 'stacked') {
+    document.getElementById('browsePanel').classList.add('collapsed');
+  }
+}
+
+function backToBrowse() {
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('placeholder').style.display = 'block';
+  document.getElementById('placeholder').querySelector('p').textContent =
+    'Select a fund above, or browse the universe table to find one';
+  document.getElementById('browseSummaryBar').classList.remove('visible');
+  document.getElementById('browsePanel').classList.remove('collapsed');
+  document.querySelectorAll('#browseTableBody tr.selected').forEach(tr => tr.classList.remove('selected'));
+}
+
+function applyLayoutMode() {
+  const wrap = document.getElementById('universeWrap');
+  wrap.classList.toggle('mode-sidebar', _layoutMode === 'sidebar');
+  wrap.classList.toggle('mode-stacked', _layoutMode === 'stacked');
+  const btn = document.getElementById('layoutToggleBtn');
+  btn.classList.toggle('active', _layoutMode === 'sidebar');
+  btn.innerHTML = _layoutMode === 'sidebar' ? '&#8644; Stacked view' : '&#8644; Sidebar view';
+
+  const panel = document.getElementById('browsePanel');
+  if (_layoutMode === 'sidebar') {
+    panel.classList.remove('collapsed');
+  } else if (document.getElementById('dashboard').style.display === 'block') {
+    panel.classList.add('collapsed');
+  }
+  renderBrowseTable(_filteredRows);
+}
+
+document.getElementById('browseTableHead').addEventListener('click', e => {
+  const th = e.target.closest('th[data-key]');
+  if (!th) return;
+  const key = th.dataset.key;
+  const textCols = new Set(['ticker', 'long_name', 'asset_class', 'benchmark']);
+  if (_browseSort.key === key) {
+    _browseSort.dir = _browseSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _browseSort.key = key;
+    _browseSort.dir = textCols.has(key) ? 'asc' : 'desc';
+  }
+  applyBrowseFilters();
+});
+
+document.getElementById('browseTableBody').addEventListener('click', e => {
+  const tr = e.target.closest('tr.browse-row');
+  if (!tr) return;
+  selectUniverseFund(tr.dataset.ticker);
+});
+
+document.getElementById('backToBrowseBtn').addEventListener('click', backToBrowse);
+
+document.getElementById('layoutToggleBtn').addEventListener('click', () => {
+  _layoutMode = _layoutMode === 'sidebar' ? 'stacked' : 'sidebar';
+  localStorage.setItem('fundReplicationLayoutMode', _layoutMode);
+  applyLayoutMode();
+});
+
+document.getElementById('browseSearch').addEventListener('input', applyBrowseFilters);
+['browseAssetClass', 'browseMinGrade', 'browseMinPeer', 'browseIncludePassive'].forEach(id =>
+  document.getElementById(id).addEventListener('change', applyBrowseFilters)
+);
+
 // ── Event listeners ────────────────────────────────────────────────────────────
 document.getElementById('fundSelect').addEventListener('change', e => {
   if (e.target.value) runAnalysis(e.target.value);
@@ -1261,6 +1687,8 @@ document.getElementById('tickerInput').addEventListener('keydown', e => {
 });
 
 loadFunds();
+fetchUniverse();
+applyLayoutMode();
 </script>
 </body>
 </html>

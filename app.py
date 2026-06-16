@@ -15,6 +15,7 @@ import pandas as pd
 from flask import Flask, jsonify, request, send_from_directory, abort
 
 import config as cfg
+import universe_data
 from data     import load_etf_returns, load_fund_returns, load_tbill_monthly, align
 from analysis import constrained_ols, rolling_replication
 
@@ -29,6 +30,37 @@ _info_cache: dict  = {}
 
 _tbill_cache: pd.Series | None = None
 _tbill_lock  = threading.Lock()
+
+_universe_meta: dict | None = None
+_universe_lock = threading.Lock()
+_browse_cache: list | None = None
+_browse_lock   = threading.Lock()
+
+
+def _get_universe_meta() -> dict:
+    """ticker -> fund_universe row, for fast metadata/NAV lookups (no live API calls)."""
+    global _universe_meta
+    if _universe_meta is None:
+        with _universe_lock:
+            if _universe_meta is None:
+                try:
+                    _universe_meta = universe_data.load_universe_meta()
+                except Exception:
+                    _universe_meta = {}
+    return _universe_meta
+
+
+def _get_browse_funds() -> list:
+    """Cached list of analysed universe funds for the Browse Universe table."""
+    global _browse_cache
+    if _browse_cache is None:
+        with _browse_lock:
+            if _browse_cache is None:
+                try:
+                    _browse_cache = universe_data.list_browse_funds()
+                except Exception:
+                    _browse_cache = []
+    return _browse_cache
 
 
 def _get_tbill_monthly() -> pd.Series:
@@ -126,28 +158,45 @@ _FI_BENCHMARK_CANDIDATES = [
     "SHY",   # 1-3yr treasuries
 ]
 
+# Representative equity passives — broad style/cap/region splits, deliberately
+# excluding near-duplicates of SPY (e.g. VTI, IWB) so the fit can't be ambiguous
+# between two near-identical large-blend trackers.
+_EQUITY_BENCHMARK_CANDIDATES = [
+    "SPY",   # large blend
+    "QQQ",   # large growth / tech-heavy
+    "IWF",   # large growth (broader than QQQ)
+    "IWD",   # large value
+    "IJH",   # mid blend
+    "IWM",   # small blend
+    "EFA",   # developed international
+    "ACWI",  # global all-country
+]
 
-def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> str:
+
+def _pick_benchmark_by_fit(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame",
+                            candidates: list[str], fallback: str) -> str:
     """
-    Pick the FI passive whose annual returns most closely match the fund.
+    Pick whichever candidate ETF's annual returns most closely match the fund's.
 
-    Monthly correlations and vols are dominated by the shared interest-rate
-    factor, so they discriminate poorly between credit-risk tiers. Annual
-    return RMSE cuts through that: an IG-corporate fund will track LQD closely
-    year-by-year even when both move with rates.
+    Monthly correlations and vols are dominated by shared macro factors (rates
+    for bonds, market beta for equities), so they discriminate poorly between
+    style/credit tiers. Annual return RMSE cuts through that: an IG-corporate
+    fund will track LQD closely year-by-year even when both move with rates;
+    a large-blend equity fund will track SPY closely even when both move with
+    the market.
 
     Scoring:
       70%  annual return RMSE  — exp(-10 * rmse_annual); primary discriminator
       30%  monthly correlation — co-movement direction / secondary check
       ×    coverage ratio      — (years_overlap / fund_oos_years); penalises
-                                 ETFs with short history that appear to fit well
-                                 over fewer years
+                                 candidates with short history that appear to
+                                 fit well over fewer years
       ×    vol cap             — min(1, MAX_BM_VOL_RATIO / vol_ratio); no penalty
                                  below the cap, proportional penalty above it so
-                                 high-vol ETFs (TLT, CWB vs a core bond fund)
-                                 can't win purely on return coincidence
+                                 high-vol candidates can't win purely on return
+                                 coincidence
 
-    Falls back to BND if no candidate reaches 5 annual observations.
+    Falls back to `fallback` if no candidate reaches 5 annual observations.
     """
     roll_idx   = pd.DatetimeIndex(roll_fund.index)
     fund_years = roll_idx.year.nunique()
@@ -160,10 +209,10 @@ def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> s
 
     ann_fund = _ann(roll_fund)
 
-    best_ticker = "BND"
+    best_ticker = fallback
     best_score  = -np.inf
 
-    for t in _FI_BENCHMARK_CANDIDATES:
+    for t in candidates:
         if t not in etf_ret_raw.columns:
             continue
         etf_s    = etf_ret_raw[t].reindex(roll_fund.index).ffill()
@@ -201,6 +250,14 @@ def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> s
             best_ticker = t
 
     return best_ticker
+
+
+def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> str:
+    return _pick_benchmark_by_fit(roll_fund, etf_ret_raw, _FI_BENCHMARK_CANDIDATES, fallback="BND")
+
+
+def _pick_equity_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> str:
+    return _pick_benchmark_by_fit(roll_fund, etf_ret_raw, _EQUITY_BENCHMARK_CANDIDATES, fallback="SPY")
 
 
 def _grade_description(f_sr, r_sr, b_sr, bm_label: str = "benchmark") -> str:
@@ -259,10 +316,12 @@ def _fund_grade(periods: dict, bm_label: str = "benchmark") -> dict:
         else:
             spill += tw
     if spill > 0:
-        if "full" in eff_weights:
+        if "full_hist" in eff_weights:
+            eff_weights["full_hist"] += spill
+        elif "full" in eff_weights:
             eff_weights["full"] += spill
         else:
-            # 'full' itself is missing — spread spill across whatever is present
+            # neither full-history bucket is present — spread spill across whatever is present
             present = list(eff_weights)
             if present:
                 per = spill / len(present)
@@ -314,7 +373,20 @@ def _fund_grade(periods: dict, bm_label: str = "benchmark") -> dict:
         score = 3.0 + 2.0 * diff / HIGH
     else:
         score = 3.0 + 2.0 * diff / abs(LOW)
-    score = round(max(1.0, min(5.0, score)), 1)
+    score = max(1.0, min(5.0, score))
+
+    # "Closet index" penalty — a high full-history R² against a single static passive
+    # blend means the fund hasn't changed style/allocation much over its life, so a
+    # buy-and-hold mix would have replicated it just as well. Applied independently
+    # of the Sharpe-diff score above, since a decent Sharpe diff can still just be
+    # noise within an otherwise static style.
+    r2_full = (periods.get("full_hist") or {}).get("r_squared")
+    r2_penalty = 0.0
+    if r2_full is not None and r2_full > cfg.GRADE_R2_PENALTY_THRESHOLD:
+        r2_penalty = (cfg.GRADE_R2_PENALTY_MAX
+                      * (r2_full - cfg.GRADE_R2_PENALTY_THRESHOLD)
+                      / (1.0 - cfg.GRADE_R2_PENALTY_THRESHOLD))
+    score = round(max(1.0, min(5.0, score - r2_penalty)), 1)
 
     thresholds = [
         (4.7, "A"), (4.4, "A-"), (4.1, "B+"), (3.8, "B"),
@@ -327,11 +399,19 @@ def _fund_grade(periods: dict, bm_label: str = "benchmark") -> dict:
             grade = g
             break
 
+    desc = _grade_description(f_sr, r_sr, b_sr, bm_label)
+    if r2_penalty > 0.05:
+        desc += (f" Full-history returns are {r2_full*100:.0f}% explained by a static "
+                 f"passive blend (R²) — a {r2_penalty:.1f}-pt deduction reflects "
+                 f"limited style differentiation from a buy-and-hold alternative.")
+
     return {
-        "score":   score,
-        "grade":   grade,
-        "desc":    _grade_description(f_sr, r_sr, b_sr, bm_label),
-        "wtd_avg": wtd_avg,
+        "score":          score,
+        "grade":          grade,
+        "desc":           desc,
+        "wtd_avg":        wtd_avg,
+        "r_squared_full": r2_full,
+        "r2_penalty":     round(r2_penalty, 2),
     }
 
 
@@ -383,12 +463,41 @@ def get_funds():
     return jsonify(funds)
 
 
+@app.route("/api/universe")
+def api_universe():
+    """All analysed funds in fund_universe, joined with their batch_summary grade/stats."""
+    return jsonify(_get_browse_funds())
+
+
 @app.route("/api/fundinfo/<ticker>")
 def fund_info(ticker: str):
-    """Fetch live fund metadata from yfinance .info (cached per session)."""
+    """Fund metadata. Prefers cached fund_universe data; falls back to live yfinance .info."""
     ticker = ticker.upper()
     if ticker in _info_cache:
         return jsonify(_info_cache[ticker])
+
+    umeta = _get_universe_meta().get(ticker)
+    if umeta:
+        assets = umeta.get("aum_millions")
+        assets_str = None
+        if assets:
+            assets_str = f"${assets/1000:.1f}B" if assets >= 1000 else f"${assets:.0f}M"
+        result = dict(
+            long_name    = umeta.get("long_name") or ticker,
+            description  = "",
+            category     = umeta.get("asset_class") or "",
+            fund_family  = umeta.get("fund_family") or "",
+            inception    = (str(umeta["inception_date"])[:10] if umeta.get("inception_date") else None),
+            total_assets = assets_str,
+            er           = umeta.get("expense_ratio"),
+            ytd_return   = None,
+            three_yr     = None,
+            five_yr      = None,
+            ms_risk      = umeta.get("ms_risk"),
+            ms_overall   = umeta.get("ms_overall"),
+        )
+        _info_cache[ticker] = result
+        return jsonify(result)
 
     import yfinance as yf
     try:
@@ -438,12 +547,21 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
 
     etf_ret = _get_etf_returns()
 
+    _umeta = _get_universe_meta().get(ticker)
+
     # Derive metadata early — needed for category-based benchmark selection below
     if ticker in cfg.ACTIVE_MUTUAL_FUNDS:
         meta = cfg.ACTIVE_MUTUAL_FUNDS[ticker]
     elif ticker in cfg.ACTIVE_ETFS:
         desc = cfg.ACTIVE_ETFS[ticker]
         meta = {"name": desc.split("(")[0].strip(), "er": 0.0075, "stars": None, "category": "Active ETF"}
+    elif _umeta:
+        meta = {
+            "name":     _umeta.get("long_name") or ticker,
+            "er":       _umeta.get("expense_ratio"),
+            "stars":    _umeta.get("ms_overall"),
+            "category": _umeta.get("category") or "",
+        }
     else:
         meta = {"name": ticker, "er": None, "stars": None, "category": ""}
 
@@ -453,6 +571,8 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         if ticker not in raw.columns:
             raise ValueError(f"{ticker} not found in DB")
         fund_raw = raw[ticker].dropna()
+    elif ticker not in cfg.ACTIVE_MUTUAL_FUNDS and _umeta:
+        fund_raw = universe_data.load_universe_fund_nav(ticker)
     else:
         raw      = load_fund_returns([ticker], start=cfg.DEFAULT_START, end=cfg.DEFAULT_END)
         if ticker not in raw.columns:
@@ -508,6 +628,14 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     else:
         _cat_bm = ""
 
+    # Nothing matched yet (no override, no FI signal, category unset/unmapped) —
+    # pick the best-fitting equity style benchmark from real return data instead
+    # of a coarse fund-vol-vs-QQQ-vol threshold. Covers the common case of
+    # broad/diversified funds whose volatility happens to sit near QQQ's despite
+    # holding no real tech concentration (e.g. FCTDX, a total-market blend fund).
+    if not bm_override and not _cat_bm:
+        _cat_bm = _pick_equity_benchmark(roll_fund, _etf_ret_raw)
+
     # Load benchmark series. SPY/QQQ come from etf_aligned (full history guaranteed).
     # Category/FI benchmarks may have later inception than the fund, so fall back to
     # raw etf_ret restricted to the OOS window.
@@ -527,6 +655,13 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         bm_label = bm_override
         if bm_override in benchmarks:
             benchmarks["SPY"] = benchmarks[bm_override]
+        elif bm_override in _etf_ret_raw.columns:
+            _bm_s = (_etf_ret_raw[bm_override]
+                     .dropna()
+                     .reindex(roll_fund.index)
+                     .ffill()
+                     .fillna(0.0))
+            benchmarks["SPY"] = _bm_s
         elif bm_override != "SPY":
             try:
                 _bm_raw = load_fund_returns([bm_override],
@@ -544,9 +679,8 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
             except Exception:
                 bm_label = "SPY"
 
-    # Select primary benchmark: explicit override > category map > vol-based auto (SPY/QQQ).
-    # Category map ensures mid-cap, small-cap, and international funds are compared
-    # against a style-matched benchmark rather than penalised vs SPY.
+    # Select primary benchmark: explicit override > category map / FI pick /
+    # data-driven equity pick (all funnelled into _cat_bm above).
     bm_oos         = None
     bm_oos_chart   = None
     bm_label_chart = bm_label
@@ -560,15 +694,7 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
             bm_label = _cat_bm
             benchmarks["SPY"] = benchmarks[_cat_bm]
         else:
-            qqq_std  = (float(benchmarks["QQQ"].std() * np.sqrt(12))
-                        if "QQQ" in benchmarks else 999.0)
-            if std_f_full >= qqq_std:
-                bm_oos   = benchmarks["QQQ"]
-                bm_label = "QQQ"
-                # Make spy_ret slot hold QQQ data so the primary-bm column is correct
-                benchmarks["SPY"] = benchmarks["QQQ"]
-            else:
-                bm_oos = benchmarks["SPY"]
+            bm_oos = benchmarks["SPY"]
 
     if bm_oos is not None and std_f_full > 0:
         std_bm = float(bm_oos.std() * np.sqrt(12))
@@ -584,6 +710,21 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
             bm_label_chart       = f"{bm_label} risk-adj"
         else:
             bm_oos_chart = bm_oos
+
+    # Full-history benchmark set — same chosen tickers as `benchmarks`, but reindexed
+    # over the ENTIRE fund history (not just the post-training OOS window), so the
+    # "full_hist" period below and the full-history chart aren't blind to the training years.
+    tbill_full = _get_tbill_monthly().reindex(fund_ret.index).ffill().fillna(0.0)
+    benchmarks_full: dict[str, pd.Series] = {}
+    for _bmt in {"SPY", "QQQ"}:
+        _src = etf_aligned if _bmt in etf_aligned.columns else _etf_ret_raw
+        if _bmt in benchmarks and _bmt in _src.columns:
+            _s = _src[_bmt].reindex(fund_ret.index).ffill()
+            if _s.notna().sum() >= 12:
+                benchmarks_full[_bmt] = _s
+    if "SPY" in benchmarks_full and bm_w is not None:
+        benchmarks_full["bm_adj"] = (bm_w * benchmarks_full["SPY"]
+                                      + (1.0 - bm_w) * tbill_full).rename("bm_adj")
 
     # Trailing period performance — bm_adj automatically appears as bm_adj_* keys
     periods = {}
@@ -620,6 +761,42 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         periods["full"][f"{key}_std"]    = st["std"]
         periods["full"][f"{key}_sharpe"] = st["sharpe"]
 
+    # Full-history period — ENTIRE fund history (including the training years the
+    # rolling-OOS view above discards), replica = single static full-IS weight vector.
+    # By construction this replica was fit to minimise error against this exact data,
+    # so a high R² here means a static, never-rebalanced passive blend tracks the fund
+    # closely across its whole life — itself a signal of low style/allocation drift.
+    cum_fund_full = (1 + fund_ret).cumprod()
+    cum_is_full   = (1 + replica_is).cumprod()
+    n_full        = len(fund_ret)
+    ann_f_full2   = float(cum_fund_full.iloc[-1] ** (12 / n_full) - 1)
+    ann_is_full   = float(cum_is_full.iloc[-1]   ** (12 / n_full) - 1)
+    std_f_full2   = float(fund_ret.std() * np.sqrt(12))
+    std_is_full   = float(replica_is.std() * np.sqrt(12))
+    diff_is_full  = fund_ret - replica_is
+    ss_res = float((diff_is_full ** 2).sum())
+    ss_tot = float(((fund_ret - fund_ret.mean()) ** 2).sum())
+    r2_full = round(1.0 - ss_res / ss_tot, 4) if ss_tot > 0 else None
+
+    periods["full_hist"] = dict(
+        fund_ret       = round(ann_f_full2, 4),
+        replica_ret    = round(ann_is_full, 4),
+        fund_std       = round(std_f_full2, 4),
+        replica_std    = round(std_is_full, 4),
+        tracking_error = round(float(diff_is_full.std() * np.sqrt(12)), 4),
+        fund_sharpe    = round(ann_f_full2 / std_f_full2, 2) if std_f_full2 > 0 else None,
+        replica_sharpe = round(ann_is_full / std_is_full, 2) if std_is_full > 0 else None,
+        r_squared      = r2_full,
+        label          = (f"Full History, R² to static blend: {round(r2_full*100)}%"
+                          if r2_full is not None else "Full History"),
+    )
+    for _bm_key, _bm_series in benchmarks_full.items():
+        st  = _bm_stats(_bm_series, n_full)
+        key = _bm_key.lower()
+        periods["full_hist"][f"{key}_ret"]    = st["ret"]
+        periods["full_hist"][f"{key}_std"]    = st["std"]
+        periods["full_hist"][f"{key}_sharpe"] = st["sharpe"]
+
     # Weights dict (full IS, sorted descending)
     weights = {
         etf_aligned.columns[i]: round(float(w[i]), 4)
@@ -629,7 +806,7 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
 
     # Replica cost
     rep_er     = _replica_er(weights)
-    fund_er    = cfg.ACTIVE_MUTUAL_FUNDS.get(ticker, {}).get("er") or 0.0075
+    fund_er    = meta.get("er") or 0.0075
     fee_saving = round(fund_er - rep_er, 4)
 
     # Fund grade — multi-period weighted (all periods passed, function handles NaNs)
@@ -648,6 +825,30 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         benchmark  = ([round(float(v), 4) for v in bm_oos_chart.values]
                       if bm_oos_chart is not None else None),
         benchmark_ticker = bm_label_chart,
+    )
+
+    # Full-history cumulative series — Fund/IS-Replica/Risk-Adj-Benchmark from true
+    # inception; the rolling-OOS replica is overlaid starting at the OOS start date,
+    # rescaled so it picks up at the fund's actual cumulative level at that point
+    # instead of resetting to 1.0 (which would look like a discontinuous jump).
+    oos_start_date   = roll_fund.index[0]
+    base             = float(cum_fund_full.loc[oos_start_date])
+    cum_rep_rescaled = base * cum_rep / float(cum_rep.iloc[0])
+    rep_oos_full = pd.Series(np.nan, index=fund_ret.index)
+    rep_oos_full.loc[cum_rep_rescaled.index] = cum_rep_rescaled.values
+
+    cum_bmadj_full = ((1 + benchmarks_full["bm_adj"]).cumprod()
+                       if "bm_adj" in benchmarks_full else None)
+
+    cumulative_full = dict(
+        dates       = [str(d.date()) for d in fund_ret.index],
+        fund        = [round(float(v), 4) for v in cum_fund_full.values],
+        replica_is  = [round(float(v), 4) for v in cum_is_full.values],
+        replica_oos = [None if pd.isna(v) else round(float(v), 4) for v in rep_oos_full.values],
+        benchmark   = ([round(float(v), 4) for v in cum_bmadj_full.values]
+                       if cum_bmadj_full is not None else None),
+        benchmark_ticker = bm_label_chart,
+        oos_start   = str(oos_start_date.date()),
     )
 
     # Rolling weights over time — filter to ETFs with meaningful average allocation
@@ -696,6 +897,7 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
                           if bm_oos_chart is not None else None),
             benchmark_ticker = bm_label_chart,
         ),
+        cumulative_full = cumulative_full,
         grade    = grade,
         bm_label = bm_label,
         bm_w     = bm_w,      # vol-scaling factor, e.g. 0.62 → "62% SPY + 38% T-bill"

@@ -226,15 +226,23 @@ MAX_BM_VOL_RATIO    = 1.5
 # ── Grade / scoring parameters ────────────────────────────────────────────────
 # Period weights for weighted-average Sharpe used in scoring (re-normalised if period unavailable)
 GRADE_TIME_WEIGHTS: dict[str, float] = {
-    "10y":  0.35,
-    "full": 0.20,
-    "5y":   0.25,
-    "3y":   0.15,
-    "1y":   0.05,
+    "10y":       0.30,
+    "full_hist": 0.20,   # entire history, static IS weights vs full-period benchmark
+    "full":      0.10,   # OOS-only full period
+    "5y":        0.20,
+    "3y":        0.15,
+    "1y":        0.05,
 }
 GRADE_BLEND_REP_WT: float = 0.50   # replica's share in the Sharpe blend (vs bm_adj)
 GRADE_HIGH_DIFF:    float =  0.20  # Sharpe diff where score reaches 5.0
 GRADE_LOW_DIFF:     float = -0.20  # Sharpe diff where score drops to 1.0
+
+# R²-based "closet index" penalty: a high full-history R² between the fund and a
+# single static (never-rebalanced) passive blend means the fund hasn't materially
+# changed style/allocation over time — a buy-and-hold mix would have replicated it
+# just as well, independent of whatever Sharpe diff it happens to show.
+GRADE_R2_PENALTY_THRESHOLD: float = 0.90   # full-history R² below this -> no penalty
+GRADE_R2_PENALTY_MAX:       float = 1.0    # max score points deducted as R² -> 1.0
 
 # ── Category → benchmark mapping ──────────────────────────────────────────────
 # Maps Morningstar category to the most appropriate passive benchmark ETF.
