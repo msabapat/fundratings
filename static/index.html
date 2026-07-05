@@ -1637,10 +1637,13 @@ function renderBrowseTable(rows) {
 }
 
 function selectUniverseFund(ticker) {
-  const row = _universeData.find(r => r.ticker === ticker);
   document.getElementById('fundSelect').value = '';
   document.getElementById('tickerInput').value = ticker;
-  document.getElementById('bmInput').value = (row && row.benchmark) ? row.benchmark : '';
+  // Leave "Compare vs" blank so the page picks the benchmark live (same
+  // composite-score selection used for grading), rather than forcing an
+  // override from the older batch_summary.benchmark field, which can
+  // disagree with the current methodology's choice.
+  document.getElementById('bmInput').value = '';
   runAnalysis(ticker);
 }
 

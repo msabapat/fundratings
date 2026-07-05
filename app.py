@@ -613,7 +613,7 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # "full_hist" period below and the full-history chart aren't blind to the training years.
     tbill_full = _get_tbill_monthly().reindex(fund_ret.index).ffill().fillna(0.0)
     benchmarks_full: dict[str, pd.Series] = {}
-    for _bmt in {"SPY", "QQQ", _cat_bm} - {""}:
+    for _bmt in {"SPY", "QQQ", _cat_bm, bm_override.upper()} - {""}:
         _src = etf_aligned if _bmt in etf_aligned.columns else _etf_ret_raw
         if _bmt in _src.columns:
             _s = _src[_bmt].reindex(fund_ret.index).ffill()
