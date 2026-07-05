@@ -2,12 +2,18 @@
 # Read-only access to fund_universe.duckdb for the Browse Universe dashboard tab.
 
 from __future__ import annotations
+import os
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
-DB_PATH = Path(__file__).parent / "fund_universe.duckdb"
+# Local dev: file lives alongside the code. Railway: FUND_UNIVERSE_DB_PATH
+# points at the persistent volume mount (e.g. /data/fund_universe.duckdb) --
+# the DB is gitignored (~40MB, changes independently of code deploys) and
+# isn't baked into the image, so it has to live on a volume in production.
+DB_PATH = Path(os.environ.get("FUND_UNIVERSE_DB_PATH")
+               or Path(__file__).parent / "fund_universe.duckdb")
 
 
 def _con() -> duckdb.DuckDBPyConnection:

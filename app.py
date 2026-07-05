@@ -469,6 +469,38 @@ def api_universe():
     return jsonify(_get_browse_funds())
 
 
+@app.route("/admin/upload-db", methods=["POST"])
+def admin_upload_db():
+    """
+    One-off (and repeatable) way to get fund_universe.duckdb onto Railway's
+    persistent volume -- there's no direct file-upload path to a Railway
+    volume otherwise. Protected by a shared-secret token so it can be left
+    in place for future refreshes rather than deployed-then-removed each time.
+
+    Usage: curl -X POST -H "X-Admin-Token: $ADMIN_UPLOAD_TOKEN" \
+                -F "file=@fund_universe.duckdb" https://<host>/admin/upload-db
+    """
+    expected = os.environ.get("ADMIN_UPLOAD_TOKEN")
+    if not expected or request.headers.get("X-Admin-Token") != expected:
+        abort(403)
+    f = request.files.get("file")
+    if f is None:
+        return jsonify(error="no file provided (expected multipart field 'file')"), 400
+
+    dest = universe_data.DB_PATH
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".uploading")
+    f.save(tmp)
+    tmp.replace(dest)
+
+    # Force the next /api/universe call to re-read from the freshly uploaded file.
+    global _browse_cache
+    with _browse_lock:
+        _browse_cache = None
+
+    return jsonify(ok=True, path=str(dest), size_bytes=dest.stat().st_size)
+
+
 @app.route("/api/fundinfo/<ticker>")
 def fund_info(ticker: str):
     """Fund metadata. Prefers cached fund_universe data; falls back to live yfinance .info."""
