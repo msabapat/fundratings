@@ -308,8 +308,9 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
 .is-note.visible { display: block; }
 
 /* ─── Browse universe ────────────────────────────────────────────── */
-#universeWrap { display: block; }
-#universeWrap.mode-sidebar { display: flex; gap: 24px; align-items: flex-start; }
+#universeWrap { display: flex; gap: 20px; align-items: flex-start; }
+#universeMain { flex: 1 1 auto; min-width: 0; display: block; }
+#universeWrap.mode-sidebar #universeMain { display: flex; gap: 24px; align-items: flex-start; }
 #universeWrap.mode-sidebar #browsePanel {
   width: 380px; flex: 0 0 380px; position: sticky; top: 12px;
   max-height: calc(100vh - 24px); overflow-y: auto;
@@ -318,6 +319,26 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
 #universeWrap.mode-sidebar .browse-toolbar-row { flex-direction: column; align-items: stretch; }
 #universeWrap.mode-sidebar .browse-toolbar-row > * { width: 100%; }
 #universeWrap.mode-sidebar #layoutToggleBtn { order: -1; }
+
+/* ─── Fund-type sidebar ──────────────────────────────────────────── */
+#typeSidebar {
+  width: 210px; flex: 0 0 210px; position: sticky; top: 12px;
+  max-height: calc(100vh - 24px); overflow-y: auto;
+  background: #fff; border: 1px solid #e1e6f0; border-radius: 10px; padding: 12px;
+}
+.type-sidebar-title {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.6px;
+  color: #7a8ea8; padding: 4px 8px 8px;
+}
+.type-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 0.82rem;
+  color: #33465c; transition: background 0.1s;
+}
+.type-item:hover { background: #f4f7fd; }
+.type-item.active { background: #2f5fd4; color: #fff; }
+.type-item.active .type-count { color: #dbe6ff; }
+.type-count { font-size: 0.74rem; color: #94a3b8; }
 
 #browsePanel.collapsed .browse-toolbar,
 #browsePanel.collapsed .table-card { display: none; }
@@ -422,6 +443,13 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
 
 <main>
 <div id="universeWrap" class="mode-stacked">
+
+  <aside id="typeSidebar">
+    <div class="type-sidebar-title">Fund Type</div>
+    <div id="typeSidebarList"></div>
+  </aside>
+
+  <div id="universeMain">
 
   <section id="browsePanel">
     <div class="browse-toolbar">
@@ -683,6 +711,8 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
   </div><!-- /dashboard -->
 
   </section><!-- /dashboardArea -->
+
+  </div><!-- /universeMain -->
 
 </div><!-- /universeWrap -->
 </main>
@@ -1446,6 +1476,7 @@ let _universeData = [];
 let _filteredRows = [];
 let _browseSort   = { key: 'aum_millions', dir: 'desc' };
 let _layoutMode   = localStorage.getItem('fundReplicationLayoutMode') || 'stacked';
+let _typeFilter   = '';
 
 function esc(s) {
   if (s == null) return '';
@@ -1464,19 +1495,19 @@ function fmtAlpha(v) { return v != null ? (v*100>=0?'+':'')+(v*100).toFixed(1)+'
 const BROWSE_COLS_FULL = [
   { key:'ticker',          label:'Ticker' },
   { key:'long_name',       label:'Name' },
-  { key:'asset_class',     label:'Asset Class' },
+  { key:'fund_type',       label:'Type' },
   { key:'aum_millions',    label:'AUM',    num:true },
   { key:'expense_ratio',   label:'ER',     num:true },
-  { key:'benchmark',       label:'Benchmark' },
-  { key:'grade',           label:'Grade',  num:true },
+  { key:'single_etf_benchmark', label:'Benchmark' },
+  { key:'recent_grade',    label:'Recent',  num:true },
+  { key:'overall_grade',   label:'Overall', num:true },
   { key:'peer_percentile', label:'Peer %', num:true },
   { key:'wtd_alpha',       label:'Alpha',  num:true },
   { key:'wtd_info_ratio',  label:'Info Ratio', num:true },
-  { key:'wtd_beat_rate',   label:'Beat %', num:true },
 ];
 const BROWSE_COLS_COMPACT = [
   { key:'ticker',          label:'Fund' },
-  { key:'grade',           label:'Grade',  num:true },
+  { key:'overall_grade',   label:'Overall', num:true },
   { key:'peer_percentile', label:'Peer %', num:true },
 ];
 
@@ -1486,7 +1517,38 @@ async function fetchUniverse() {
   } catch (e) {
     _universeData = [];
   }
+  renderTypeSidebar();
   applyBrowseFilters();
+}
+
+function renderTypeSidebar() {
+  const counts = {};
+  _universeData.forEach(r => {
+    const t = r.fund_type || 'Other';
+    counts[t] = (counts[t] || 0) + 1;
+  });
+  const types = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+
+  const list = document.getElementById('typeSidebarList');
+  const allActive = _typeFilter === '' ? 'active' : '';
+  let html = `<div class="type-item ${allActive}" data-type="">
+      <span>All Types</span><span class="type-count">${_universeData.length}</span>
+    </div>`;
+  html += types.map(t => {
+    const active = _typeFilter === t ? 'active' : '';
+    return `<div class="type-item ${active}" data-type="${esc(t)}">
+        <span>${esc(t)}</span><span class="type-count">${counts[t]}</span>
+      </div>`;
+  }).join('');
+  list.innerHTML = html;
+
+  list.querySelectorAll('.type-item').forEach(el => {
+    el.addEventListener('click', () => {
+      _typeFilter = el.dataset.type;
+      renderTypeSidebar();
+      applyBrowseFilters();
+    });
+  });
 }
 
 function applyBrowseFilters() {
@@ -1499,6 +1561,7 @@ function applyBrowseFilters() {
   let rows = _universeData.filter(r => {
     if (!includePassive && r.is_active === false) return false;
     if (ac && r.asset_class !== ac) return false;
+    if (_typeFilter && (r.fund_type || 'Other') !== _typeFilter) return false;
     if (minGrade && !(r.grade >= minGrade)) return false;
     if (minPeer && !(r.peer_percentile >= minPeer)) return false;
     if (search) {
@@ -1544,25 +1607,31 @@ function renderBrowseTable(rows) {
   }
   tbody.innerHTML = rows.map(r => {
     const gradeCell = `<span class="grade-pill ${gradeClass(r.grade)}">${fmtGrade(r.grade)}</span>`;
+    const recentCell  = `<span class="grade-pill ${gradeClass(r.recent_grade)}">${fmtGrade(r.recent_grade)}</span>`;
+    const overallCell = `<span class="grade-pill ${gradeClass(r.overall_grade)}">${fmtGrade(r.overall_grade)}</span>`;
+    const bmLabel = esc(r.single_etf_benchmark || r.benchmark) || '—';
+    const bmWarn  = r.single_etf_benchmark_low_r2
+      ? ` <span title="No single ETF explains this fund well (R² < 70%) — grade uses the replica portfolios more heavily." style="color:#c2410c;cursor:help;">&#9888;</span>`
+      : '';
     if (compact) {
       return `<tr class="browse-row" data-ticker="${esc(r.ticker)}">
         <td><div class="bc-name">${esc(r.ticker)}</div><div class="bc-sub">${esc(r.long_name)}</div></td>
-        <td class="num-cell">${gradeCell}</td>
+        <td class="num-cell">${overallCell}</td>
         <td class="num-cell">${fmtPeer(r.peer_percentile)}</td>
       </tr>`;
     }
     return `<tr class="browse-row" data-ticker="${esc(r.ticker)}">
       <td><b>${esc(r.ticker)}</b></td>
       <td><div class="bc-name">${esc(r.long_name)}</div><div class="bc-sub">${esc(r.fund_family)}</div></td>
-      <td>${esc(r.asset_class) || '—'}</td>
+      <td>${esc(r.fund_type) || '—'}</td>
       <td class="num-cell">${fmtAum(r.aum_millions)}</td>
       <td class="num-cell">${fmtErPct(r.expense_ratio)}</td>
-      <td>${esc(r.benchmark) || '—'}</td>
-      <td class="num-cell">${gradeCell}</td>
+      <td>${bmLabel}${bmWarn}</td>
+      <td class="num-cell">${recentCell}</td>
+      <td class="num-cell">${overallCell}</td>
       <td class="num-cell">${fmtPeer(r.peer_percentile)}</td>
       <td class="num-cell">${fmtAlpha(r.wtd_alpha)}</td>
       <td class="num-cell">${r.wtd_info_ratio != null ? r.wtd_info_ratio.toFixed(2) : '—'}</td>
-      <td class="num-cell">${r.wtd_beat_rate != null ? Math.round(r.wtd_beat_rate*100)+'%' : '—'}</td>
     </tr>`;
   }).join('');
 }

@@ -60,6 +60,10 @@ def create_tables(con: duckdb.DuckDBPyConnection) -> None:
             fund_ann_ret    DOUBLE,
             fund_vol        DOUBLE,
             fund_sharpe     DOUBLE,
+            -- Replica portfolio metrics (static RBSA-weight passive mix)
+            replica_ann_ret DOUBLE,
+            replica_vol     DOUBLE,
+            replica_sharpe  DOUBLE,
             -- Benchmark metrics
             bm_ann_ret      DOUBLE,
             bm_vol          DOUBLE,
@@ -69,6 +73,7 @@ def create_tables(con: duckdb.DuckDBPyConnection) -> None:
             tracking_error  DOUBLE,
             info_ratio      DOUBLE,
             r_squared       DOUBLE,
+            r_squared_replica DOUBLE,
             -- Capture ratios
             up_capture      DOUBLE,
             down_capture    DOUBLE,
@@ -268,6 +273,13 @@ def compute_period_metrics(
     fund_ann, fund_vol, _ = _annualise(f_sub)
     fund_sharpe = _sharpe_excess(f_sub, tbill)
 
+    # Replica portfolio metrics — same RBSA weights, held static over the period.
+    # Used by compute_grade to blend against the single-benchmark Sharpe, since a
+    # skilled manager should be judged against BOTH a fair single index AND what
+    # a passive replicating mix of their own style would have earned risk-free-adjusted.
+    replica_ann, replica_vol, _ = _annualise(replica)
+    replica_sharpe = _sharpe_excess(replica, tbill)
+
     # R² of fund vs its own static replica blend — high values mean a single
     # never-rebalanced passive mix tracks the fund closely (see compute_grade's
     # closet-index penalty), distinct from r_squared below (fund vs single benchmark).
@@ -282,6 +294,9 @@ def compute_period_metrics(
         "fund_ann_ret":      round(fund_ann, 4),
         "fund_vol":          round(fund_vol, 4),
         "fund_sharpe":       round(fund_sharpe, 3) if fund_sharpe else None,
+        "replica_ann_ret":   round(replica_ann, 4),
+        "replica_vol":       round(replica_vol, 4),
+        "replica_sharpe":    round(replica_sharpe, 3) if replica_sharpe else None,
         "r_squared_replica": round(r2_replica, 4) if r2_replica is not None else None,
     }
 
@@ -318,10 +333,34 @@ def compute_period_metrics(
 
 # ── Grading ───────────────────────────────────────────────────────────────────
 
+def _blend_sharpe(p: dict) -> float | None:
+    """
+    Blend replica-portfolio Sharpe (a passive mix matching the fund's own style)
+    with the single-benchmark Sharpe, per cfg.GRADE_BLEND_REP_WT. A manager should
+    be judged against both: an appropriate off-the-shelf index AND what a static
+    passive replica of their own exposures would have earned. Falls back to
+    whichever side is available if the other is missing.
+    """
+    rs = p.get("replica_sharpe")
+    bs = p.get("bm_sharpe")
+    wt = cfg.GRADE_BLEND_REP_WT
+    if rs is not None and bs is not None:
+        return wt * rs + (1.0 - wt) * bs
+    return rs if rs is not None else bs
+
+
 def compute_grade(period_rows: list[dict]) -> dict:
     """
-    Weighted grade 1–5 across periods, based on Sharpe diff vs benchmark.
+    Weighted grade 1–5 across periods, based on fund Sharpe vs a blend of the
+    replica-portfolio Sharpe and the single-benchmark Sharpe (see _blend_sharpe).
     Also returns weighted alpha, info_ratio, beat_rate for summary table.
+
+    The diff->score curve is intentionally an absolute (not rank/percentile)
+    scale: 3.0 means the fund matched its risk-adjusted blend exactly. Skilled
+    managers who beat their own style's passive replica are rare, so the
+    resulting grade distribution is expected to skew below 3.0 rather than
+    center on it — that's a feature of manager skill being scarce, not a bug
+    to correct by normalizing the histogram.
     """
     TW = cfg.GRADE_TIME_WEIGHTS
     period_map = {r["period"]: r for r in period_rows}
@@ -329,7 +368,7 @@ def compute_grade(period_rows: list[dict]) -> dict:
     eff: dict[str, float] = {}
     spill = 0.0
     for key, tw in TW.items():
-        if period_map.get(key) and period_map[key].get("bm_sharpe") is not None:
+        if period_map.get(key) and _blend_sharpe(period_map[key]) is not None:
             eff[key] = tw
         else:
             spill += tw
@@ -355,7 +394,7 @@ def compute_grade(period_rows: list[dict]) -> dict:
         p  = period_map[key]
         w  = tw / tot_w
         fs = p.get("fund_sharpe")
-        bs = p.get("bm_sharpe")
+        bs = _blend_sharpe(p)
         if fs is None or bs is None:
             continue
         diff  = fs - bs
@@ -549,15 +588,16 @@ def run_batch(con: duckdb.DuckDBPyConnection,
             for r in period_rows:
                 con.execute("""
                     INSERT OR REPLACE INTO batch_periods VALUES (
-                        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
                     )
                 """, [
                     r["ticker"], r["period"], r.get("n_months"), r.get("benchmark"),
                     r.get("weights_json"),
                     r.get("fund_ann_ret"), r.get("fund_vol"), r.get("fund_sharpe"),
+                    r.get("replica_ann_ret"), r.get("replica_vol"), r.get("replica_sharpe"),
                     r.get("bm_ann_ret"),   r.get("bm_vol"),   r.get("bm_sharpe"),
                     r.get("alpha"), r.get("tracking_error"), r.get("info_ratio"),
-                    r.get("r_squared"),
+                    r.get("r_squared"), r.get("r_squared_replica"),
                     r.get("up_capture"), r.get("down_capture"), r.get("beat_rate"),
                 ])
 

@@ -21,7 +21,7 @@ def load_universe_meta() -> dict[str, dict]:
         df = con.execute("SELECT * FROM fund_universe").df()
     finally:
         con.close()
-    df = df.where(pd.notna(df), None)
+    df = df.astype(object).where(pd.notna(df), None)
     return {row["ticker"]: row.to_dict() for _, row in df.iterrows()}
 
 
@@ -43,6 +43,21 @@ def load_universe_fund_nav(ticker: str) -> pd.Series:
     return s.dropna()
 
 
+# Columns added by grade_v2.py (2026-07). Queried defensively -- an older/stale
+# batch_summary (e.g. a not-yet-refreshed deployment DB) won't have these yet,
+# and a missing column would otherwise 500 the whole Browse Universe endpoint
+# rather than just omitting the new fields.
+_GRADE_V2_COLUMNS = [
+    "fund_type", "recent_grade", "overall_grade",
+    "single_etf_benchmark", "single_etf_benchmark_r2", "single_etf_benchmark_low_r2",
+    "is_low_vol_fund",
+]
+
+
+def _batch_summary_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
+    return set(con.execute("PRAGMA table_info('batch_summary')").df()["name"])
+
+
 def list_browse_funds() -> list[dict]:
     """
     Primary share class of every analysed fund, joined with its batch_summary
@@ -50,12 +65,16 @@ def list_browse_funds() -> list[dict]:
     """
     con = _con()
     try:
-        df = con.execute("""
+        available = _batch_summary_columns(con)
+        extra_cols = [c for c in _GRADE_V2_COLUMNS if c in available]
+        extra_sql = "".join(f", s.{c}" for c in extra_cols)
+        df = con.execute(f"""
             SELECT u.ticker, u.long_name, u.fund_family, u.asset_class,
                    u.aum_millions, u.expense_ratio, u.is_active,
                    u.has_front_load, u.has_deferred_load,
                    s.benchmark, s.grade, s.peer_percentile, s.peer_n,
                    s.wtd_alpha, s.wtd_info_ratio, s.wtd_beat_rate, s.wtd_sharpe_diff
+                   {extra_sql}
             FROM fund_universe u
             JOIN batch_summary s ON u.ticker = s.ticker
             WHERE u.share_class_role = 'primary'
@@ -63,5 +82,5 @@ def list_browse_funds() -> list[dict]:
         """).df()
     finally:
         con.close()
-    df = df.where(pd.notna(df), None)
+    df = df.astype(object).where(pd.notna(df), None)
     return df.to_dict(orient="records")

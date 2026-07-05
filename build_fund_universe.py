@@ -180,6 +180,11 @@ def _infer_is_active(long_name: str | None) -> bool:
 
 
 def _infer_asset_class(category: str | None, long_name: str | None) -> str:
+    # category/long_name arrive from a pandas column and may be NaN (float),
+    # not None, when the source row never had a value — `x or ""` doesn't
+    # catch NaN since NaN is truthy, so normalise explicitly first.
+    category  = category  if isinstance(category, str)  else None
+    long_name = long_name if isinstance(long_name, str) else None
     text = (category or "") + " " + (long_name or "")
     if _FI_PATTERNS.search(text):
         return "Fixed Income"
@@ -248,46 +253,104 @@ def get_db() -> duckdb.DuckDBPyConnection:
 def discover(con: duckdb.DuckDBPyConnection) -> None:
     max_rank = con.execute("SELECT COALESCE(MAX(rank_pos), 0) FROM raw_tickers").fetchone()[0]
 
-    if max_rank >= MAX_RANK:
-        n = con.execute("SELECT COUNT(*) FROM raw_tickers").fetchone()[0]
-        print(f"raw_tickers already complete: {n:,} rows, max rank {max_rank:,}.")
-        return
+    if max_rank < MAX_RANK:
+        start_off = (max_rank // PAGE_SIZE) * PAGE_SIZE
+        if max_rank > 0:
+            print(f"Resuming discover from offset {start_off:,} (max rank already saved: {max_rank:,})...")
+        else:
+            print(f"Paging Yahoo screener sorted by AUM desc, up to rank {MAX_RANK:,}...")
 
-    start_off = (max_rank // PAGE_SIZE) * PAGE_SIZE
-    if max_rank > 0:
-        print(f"Resuming discover from offset {start_off:,} (max rank already saved: {max_rank:,})...")
+        batch_count = 0
+        for offset in range(start_off, MAX_RANK, PAGE_SIZE):
+            res    = yf.screen(SCREEN_QUERY, offset=offset, size=PAGE_SIZE,
+                               sortField="fundnetassets", sortAsc=False)
+            quotes = res.get("quotes", [])
+            if not quotes:
+                print(f"  Empty page at offset {offset} — end of screener.")
+                break
+
+            rows = [(q["symbol"], offset + i + 1, q.get("exchange", ""))
+                    for i, q in enumerate(quotes)]
+            con.executemany("INSERT OR IGNORE INTO raw_tickers VALUES (?, ?, ?)", rows)
+            batch_count += 1
+
+            # Force WAL checkpoint every 10 pages (~2500 rows) so progress survives crashes
+            if batch_count % 10 == 0:
+                con.execute("CHECKPOINT")
+
+            n_total = con.execute("SELECT COUNT(*) FROM raw_tickers").fetchone()[0]
+            print(f"  offset {offset:5d}–{offset+len(quotes):5d}  db rows: {n_total:,}")
+
+            if len(quotes) < PAGE_SIZE:
+                print("  End of screener.")
+                break
+            time.sleep(CALL_DELAY)
+
+        con.execute("CHECKPOINT")
+        n_after_plain = con.execute("SELECT COUNT(*) FROM raw_tickers").fetchone()[0]
+        print(f"\nPlain-sort discover done: {n_after_plain:,} tickers in raw_tickers.\n")
     else:
-        print(f"Paging Yahoo screener sorted by AUM desc, up to rank {MAX_RANK:,}...")
+        print(f"Plain-sort discover already complete (max rank {max_rank:,}).")
 
-    batch_count = 0
-    for offset in range(start_off, MAX_RANK, PAGE_SIZE):
-        res    = yf.screen(SCREEN_QUERY, offset=offset, size=PAGE_SIZE,
-                           sortField="fundnetassets", sortAsc=False)
-        quotes = res.get("quotes", [])
-        if not quotes:
-            print(f"  Empty page at offset {offset} — end of screener.")
-            break
+    discover_by_star_rating(con)
 
-        rows = [(q["symbol"], offset + i + 1, q.get("exchange", ""))
-                for i, q in enumerate(quotes)]
-        con.executemany("INSERT OR IGNORE INTO raw_tickers VALUES (?, ?, ?)", rows)
-        batch_count += 1
 
-        # Force WAL checkpoint every 10 pages (~2500 rows) so progress survives crashes
-        if batch_count % 10 == 0:
-            con.execute("CHECKPOINT")
+# Yahoo's screener silently clamps `offset` once a query's total result count
+# exceeds ~10,000 (repeats the same page instead of paging further), so a
+# single AUM-sorted query can never reach past the top ~10k rows even though
+# there are 150k+ matching tickers overall (mostly duplicate share classes).
+# Partitioning by Morningstar overall star rating keeps every bucket's count
+# under the ~10k cap (checked empirically: buckets run ~1.7k–9.3k), letting us
+# page each bucket to completion and reach much further down the AUM curve —
+# including funds near the $250M floor that the plain top-10k pass never saw.
+_STAR_RANK_BASE = 1_000_000  # keeps bucketed ranks from colliding with the plain pass
 
-        n_total = con.execute("SELECT COUNT(*) FROM raw_tickers").fetchone()[0]
-        print(f"  offset {offset:5d}–{offset+len(quotes):5d}  db rows: {n_total:,}")
 
-        if len(quotes) < PAGE_SIZE:
-            print("  End of screener.")
-            break
-        time.sleep(CALL_DELAY)
+def discover_by_star_rating(con: duckdb.DuckDBPyConnection) -> None:
+    print("Paging Yahoo screener by Morningstar star rating (1-5) to bypass the ~10k offset cap...")
+
+    for star in (1, 2, 3, 4, 5):
+        query = yf.FundQuery("and", [
+            yf.FundQuery("is-in", ["exchange"] + US_EXCHANGES),
+            yf.FundQuery("eq", ["performanceratingoverall", star]),
+        ])
+        base_rank = _STAR_RANK_BASE * star
+        n_before  = con.execute(
+            "SELECT COUNT(*) FROM raw_tickers WHERE rank_pos BETWEEN ? AND ?",
+            [base_rank, base_rank + MAX_RANK - 1],
+        ).fetchone()[0]
+
+        offset = (n_before // PAGE_SIZE) * PAGE_SIZE
+        print(f"\n  Star {star}: resuming at offset {offset:,} ({n_before:,} already saved this bucket)")
+
+        batch_count = 0
+        while True:
+            res    = yf.screen(query, offset=offset, size=PAGE_SIZE,
+                               sortField="fundnetassets", sortAsc=False)
+            quotes = res.get("quotes", [])
+            if not quotes:
+                print(f"    Empty page at offset {offset} — end of bucket.")
+                break
+
+            rows = [(q["symbol"], base_rank + offset + i + 1, q.get("exchange", ""))
+                    for i, q in enumerate(quotes)]
+            con.executemany("INSERT OR IGNORE INTO raw_tickers VALUES (?, ?, ?)", rows)
+            batch_count += 1
+            offset += len(quotes)
+
+            if batch_count % 10 == 0:
+                con.execute("CHECKPOINT")
+                n_total = con.execute("SELECT COUNT(*) FROM raw_tickers").fetchone()[0]
+                print(f"    offset {offset:5d}  db rows total: {n_total:,}")
+
+            if len(quotes) < PAGE_SIZE:
+                print(f"    End of bucket at offset {offset}.")
+                break
+            time.sleep(CALL_DELAY)
 
     con.execute("CHECKPOINT")
     n_final = con.execute("SELECT COUNT(*) FROM raw_tickers").fetchone()[0]
-    print(f"\nDiscover done: {n_final:,} tickers in raw_tickers.\n")
+    print(f"\nDiscover done (plain + star-bucketed): {n_final:,} tickers in raw_tickers.\n")
 
 
 # ── Phase 2: Enrich ───────────────────────────────────────────────────────────
@@ -457,6 +520,8 @@ def select(con: duckdb.DuckDBPyConnection) -> None:
         aum  = grp.iloc[0]["total_assets"]
         cat  = grp.iloc[0]["category"]
         fam  = grp.iloc[0]["fund_family"]
+        cat  = cat if isinstance(cat, str) else None
+        fam  = fam if isinstance(fam, str) else None
 
         def make_row(row: pd.Series, role: str) -> dict:
             fl = row["front_load"]
