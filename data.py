@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DB_PATH             = Path(__file__).parent.parent / "backtester.duckdb"
+DB_PATH             = Path(__file__).parent / "etf_prices.duckdb"
 PARQUET_PATH        = Path(__file__).parent / "etf_returns.parquet"
 FUND_PARQUET_PATH   = Path(__file__).parent / "fund_returns.parquet"
 TBILL_PARQUET_PATH  = Path(__file__).parent / "tbill_returns.parquet"
