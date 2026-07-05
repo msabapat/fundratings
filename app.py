@@ -613,12 +613,22 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # "full_hist" period below and the full-history chart aren't blind to the training years.
     tbill_full = _get_tbill_monthly().reindex(fund_ret.index).ffill().fillna(0.0)
     benchmarks_full: dict[str, pd.Series] = {}
-    for _bmt in {"SPY", "QQQ"}:
+    for _bmt in {"SPY", "QQQ", _cat_bm} - {""}:
         _src = etf_aligned if _bmt in etf_aligned.columns else _etf_ret_raw
-        if _bmt in benchmarks and _bmt in _src.columns:
+        if _bmt in _src.columns:
             _s = _src[_bmt].reindex(fund_ret.index).ffill()
             if _s.notna().sum() >= 12:
                 benchmarks_full[_bmt] = _s
+    # Alias "SPY" to whichever benchmark this fund is actually being judged
+    # against, mirroring the aliasing already done for `benchmarks` above.
+    # Without this, bm_adj (and the full-history chart/description) silently
+    # fall back to comparing against real SPY for any fund whose selected
+    # benchmark differs -- e.g. a high-yield bond fund benchmarked to HYG
+    # would get its full-history performance graded against equity returns.
+    if bm_override and bm_override in benchmarks_full:
+        benchmarks_full["SPY"] = benchmarks_full[bm_override]
+    elif _cat_bm and _cat_bm in benchmarks_full:
+        benchmarks_full["SPY"] = benchmarks_full[_cat_bm]
     if "SPY" in benchmarks_full and bm_w is not None:
         benchmarks_full["bm_adj"] = (bm_w * benchmarks_full["SPY"]
                                       + (1.0 - bm_w) * tbill_full).rename("bm_adj")
