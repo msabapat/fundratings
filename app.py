@@ -18,6 +18,7 @@ import config as cfg
 import universe_data
 from data     import load_etf_returns, load_fund_returns, load_tbill_monthly, align
 from analysis import constrained_ols, rolling_replication
+from grade_v2 import select_best_single_etf, _greedy_topk
 
 app = Flask(__name__, static_folder="static")
 ANALYSIS_CACHE_PATH = Path(__file__).parent / "analysis_cache.json"
@@ -129,135 +130,6 @@ def _trailing(months: int, fund: pd.Series, replica: pd.Series,
                 result[f"{key}_std"]    = st["std"]
                 result[f"{key}_sharpe"] = st["sharpe"]
     return result
-
-
-def _infer_fi_category(w: np.ndarray, columns) -> str:
-    """
-    Returns a non-empty string when FI ETFs dominate (>50% weight), so equity
-    funds pass through unchanged and get the vol-based SPY/QQQ benchmark.
-    """
-    wd    = dict(zip(columns, w))
-    fi_wt = sum(v for k, v in wd.items() if k in cfg.FI_ETFS)
-    return "Fixed Income" if fi_wt >= 0.50 else ""
-
-
-# Representative FI passives used for data-driven benchmark selection.
-# Ordered roughly from high-credit-risk to low-risk / long-duration.
-_FI_BENCHMARK_CANDIDATES = [
-    "HYG",   # high yield
-    "CWB",   # convertibles
-    "EMB",   # emerging markets bonds
-    "LQD",   # investment grade corporate
-    "VCSH",  # short-term corporate
-    "MUB",   # munis
-    "BND",   # total bond market
-    "BNDX",  # international bonds
-    "IEF",   # 7-10yr treasuries
-    "TIP",   # TIPS
-    "TLT",   # 20+yr treasuries
-    "SHY",   # 1-3yr treasuries
-]
-
-# Representative equity passives — broad style/cap/region splits, deliberately
-# excluding near-duplicates of SPY (e.g. VTI, IWB) so the fit can't be ambiguous
-# between two near-identical large-blend trackers.
-_EQUITY_BENCHMARK_CANDIDATES = [
-    "SPY",   # large blend
-    "QQQ",   # large growth / tech-heavy
-    "IWF",   # large growth (broader than QQQ)
-    "IWD",   # large value
-    "IJH",   # mid blend
-    "IWM",   # small blend
-    "EFA",   # developed international
-    "ACWI",  # global all-country
-]
-
-
-def _pick_benchmark_by_fit(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame",
-                            candidates: list[str], fallback: str) -> str:
-    """
-    Pick whichever candidate ETF's annual returns most closely match the fund's.
-
-    Monthly correlations and vols are dominated by shared macro factors (rates
-    for bonds, market beta for equities), so they discriminate poorly between
-    style/credit tiers. Annual return RMSE cuts through that: an IG-corporate
-    fund will track LQD closely year-by-year even when both move with rates;
-    a large-blend equity fund will track SPY closely even when both move with
-    the market.
-
-    Scoring:
-      70%  annual return RMSE  — exp(-10 * rmse_annual); primary discriminator
-      30%  monthly correlation — co-movement direction / secondary check
-      ×    coverage ratio      — (years_overlap / fund_oos_years); penalises
-                                 candidates with short history that appear to
-                                 fit well over fewer years
-      ×    vol cap             — min(1, MAX_BM_VOL_RATIO / vol_ratio); no penalty
-                                 below the cap, proportional penalty above it so
-                                 high-vol candidates can't win purely on return
-                                 coincidence
-
-    Falls back to `fallback` if no candidate reaches 5 annual observations.
-    """
-    roll_idx   = pd.DatetimeIndex(roll_fund.index)
-    fund_years = roll_idx.year.nunique()
-    fund_vol   = float(roll_fund.std())
-
-    def _ann(s: "pd.Series") -> "pd.Series":
-        s = s.copy()
-        s.index = pd.to_datetime(s.index)
-        return s.groupby(s.index.year).apply(lambda x: (1 + x).prod() - 1)
-
-    ann_fund = _ann(roll_fund)
-
-    best_ticker = fallback
-    best_score  = -np.inf
-
-    for t in candidates:
-        if t not in etf_ret_raw.columns:
-            continue
-        etf_s    = etf_ret_raw[t].reindex(roll_fund.index).ffill()
-        overlap  = etf_s.notna() & roll_fund.notna()
-        if overlap.sum() < 24:
-            continue
-
-        # Annual RMSE across shared calendar years
-        ann_etf  = _ann(etf_s.dropna())
-        common   = ann_fund.index.intersection(ann_etf.index)
-        if len(common) < 5:
-            continue
-        f_ann = ann_fund[common].values
-        e_ann = ann_etf[common].values
-        ann_rmse  = float(np.sqrt(np.mean((f_ann - e_ann) ** 2)))
-        ret_score = float(np.exp(-10.0 * ann_rmse))
-
-        # Monthly correlation (secondary)
-        f_mo = roll_fund[overlap].values
-        e_mo = etf_s[overlap].values
-        corr = float(np.corrcoef(f_mo, e_mo)[0, 1])
-
-        # Coverage: penalise ETFs that only cover part of the fund's OOS history
-        coverage = len(common) / max(fund_years, 1)
-
-        # Vol cap: soft penalty when benchmark vol exceeds fund vol by more than
-        # MAX_BM_VOL_RATIO. No penalty below the cap; proportional above it.
-        etf_vol   = float(etf_s[overlap].std())
-        vol_ratio = etf_vol / fund_vol if fund_vol > 0 else 1.0
-        vol_cap   = min(1.0, cfg.MAX_BM_VOL_RATIO / vol_ratio) if vol_ratio > 0 else 1.0
-
-        score = (0.70 * ret_score + 0.30 * corr) * coverage * vol_cap
-        if score > best_score:
-            best_score  = score
-            best_ticker = t
-
-    return best_ticker
-
-
-def _pick_fi_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> str:
-    return _pick_benchmark_by_fit(roll_fund, etf_ret_raw, _FI_BENCHMARK_CANDIDATES, fallback="BND")
-
-
-def _pick_equity_benchmark(roll_fund: "pd.Series", etf_ret_raw: "pd.DataFrame") -> str:
-    return _pick_benchmark_by_fit(roll_fund, etf_ret_raw, _EQUITY_BENCHMARK_CANDIDATES, fallback="SPY")
 
 
 def _grade_description(f_sr, r_sr, b_sr, bm_label: str = "benchmark") -> str:
@@ -611,7 +483,26 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
             raise ValueError(f"{ticker} not found via yfinance")
         fund_raw = raw[ticker].dropna()
 
-    fund_ret, etf_aligned = align(fund_raw, etf_ret)
+    fund_ret, etf_full = align(fund_raw, etf_ret)
+    _etf_ret_raw = _get_etf_returns()
+
+    # Best single-ETF benchmark: the SAME composite score (40% annual-return
+    # RMSE match, 35% volatility match, 25% correlation, then an expense-ratio
+    # tie-break) used to grade this fund in grade_v2.py, instead of a separate
+    # category-map / RMSE-only cascade -- so the benchmark shown here always
+    # matches the one the fund's Recent/Overall grade was computed against.
+    if not bm_override:
+        _cat_bm, _ = select_best_single_etf(fund_ret, etf_full)
+        _cat_bm = _cat_bm or ""
+    else:
+        _cat_bm = ""
+
+    # Restrict the displayed replica to the SAME top-3 ETFs (greedy selection,
+    # full history) used for the IS/OOS replica components of the grade --
+    # a full-85-ETF fit barely improves on 3 (see grade_v2.py docstring) but
+    # is much harder to read as "what does this fund actually look like".
+    _top3 = _greedy_topk(fund_ret.values, etf_full.values, 3)
+    etf_aligned = etf_full.iloc[:, _top3[0]] if _top3 is not None else etf_full
 
     # Full-IS constrained regression (weights for the pie/bar chart)
     w          = constrained_ols(fund_ret.values, etf_aligned.values,
@@ -639,38 +530,12 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     replica_is_oos = replica_is.reindex(roll_fund.index)
     cum_is_oos     = (1 + replica_is_oos).cumprod()
 
-    # Fund vol needed for benchmark selection and vol-adjustment below
+    # Fund vol needed for vol-adjustment below
     std_f_full = float(roll_fund.std() * np.sqrt(12))
 
-    # For uncategorised funds, detect FI from RBSA weights; then pick the closest
-    # FI passive by return correlation + vol match rather than a fixed category map.
-    _etf_ret_raw = _get_etf_returns()
-    _inferred_fi_bm: str = ""
-    if not bm_override and not meta.get("category"):
-        if _infer_fi_category(w, etf_aligned.columns):
-            _inferred_fi_bm = _pick_fi_benchmark(roll_fund, _etf_ret_raw)
-
-    # Determine the category-appropriate benchmark (used when no bm_override given).
-    # Configured funds with an explicit category use CATEGORY_BM_MAP;
-    # inferred FI funds use the data-driven picker above.
-    if _inferred_fi_bm:
-        _cat_bm = _inferred_fi_bm
-    elif not bm_override:
-        _cat_bm = cfg.CATEGORY_BM_MAP.get(meta.get("category", ""), "")
-    else:
-        _cat_bm = ""
-
-    # Nothing matched yet (no override, no FI signal, category unset/unmapped) —
-    # pick the best-fitting equity style benchmark from real return data instead
-    # of a coarse fund-vol-vs-QQQ-vol threshold. Covers the common case of
-    # broad/diversified funds whose volatility happens to sit near QQQ's despite
-    # holding no real tech concentration (e.g. FCTDX, a total-market blend fund).
-    if not bm_override and not _cat_bm:
-        _cat_bm = _pick_equity_benchmark(roll_fund, _etf_ret_raw)
-
-    # Load benchmark series. SPY/QQQ come from etf_aligned (full history guaranteed).
-    # Category/FI benchmarks may have later inception than the fund, so fall back to
-    # raw etf_ret restricted to the OOS window.
+    # Load benchmark series. etf_aligned is now the 3-ETF replica subset, so
+    # SPY/QQQ/the chosen benchmark usually aren't in it -- fall back to the raw
+    # (unrestricted) ETF universe, restricted to the OOS window, for all three.
     benchmarks: dict[str, pd.Series] = {}
     for _bmt in {"SPY", "QQQ", _cat_bm} - {""}:
         _src = etf_aligned if _bmt in etf_aligned.columns else _etf_ret_raw
