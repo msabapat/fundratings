@@ -100,35 +100,46 @@ def _bm_stats(s: pd.Series, months: int) -> dict:
                 sharpe=round(ann / std, 2) if std > 0 else None)
 
 
-def _trailing(months: int, fund: pd.Series, replica: pd.Series,
-              benchmarks: dict[str, pd.Series] | None = None) -> dict | None:
-    if len(fund) < months:
+def _trailing(months: int, fund_full: pd.Series, replica_oos: pd.Series | None,
+              benchmarks_full: dict[str, pd.Series] | None = None) -> dict | None:
+    """
+    Fund and benchmark stats always come from the fund's FULL history, so a
+    fund with only e.g. 3-5 years of life still gets 3y/5y rows -- OOS
+    replication needs an initial training window before it can start, so a
+    short-history fund can have real 3y/5y fund/benchmark data with no OOS
+    replica available for those windows at all. Replica columns are simply
+    omitted (not the whole row) when there isn't enough OOS history yet.
+    """
+    if len(fund_full) < months:
         return None
-    f    = fund.iloc[-months:]
-    r    = replica.iloc[-months:]
-    diff = f - r
-    te   = float(diff.std() * np.sqrt(12))
+    f     = fund_full.iloc[-months:]
     ann_f = float(f.add(1).prod() ** (12 / months) - 1)
-    ann_r = float(r.add(1).prod() ** (12 / months) - 1)
     std_f = float(f.std() * np.sqrt(12))
-    std_r = float(r.std() * np.sqrt(12))
     sr_f  = ann_f / std_f if std_f > 0 else np.nan
-    sr_r  = ann_r / std_r if std_r > 0 else np.nan
     result = dict(
-        fund_ret=round(ann_f, 4),        replica_ret=round(ann_r, 4),
-        fund_std=round(std_f, 4),        replica_std=round(std_r, 4),
-        tracking_error=round(te, 4),
-        fund_sharpe   =round(sr_f, 2) if not np.isnan(sr_f) else None,
-        replica_sharpe=round(sr_r, 2) if not np.isnan(sr_r) else None,
+        fund_ret=round(ann_f, 4), fund_std=round(std_f, 4),
+        fund_sharpe=round(sr_f, 2) if not np.isnan(sr_f) else None,
     )
-    if benchmarks:
-        for name, bm in benchmarks.items():
+    if benchmarks_full:
+        for name, bm in benchmarks_full.items():
             if len(bm) >= months:
                 st = _bm_stats(bm.iloc[-months:], months)
                 key = name.lower()
                 result[f"{key}_ret"]    = st["ret"]
                 result[f"{key}_std"]    = st["std"]
                 result[f"{key}_sharpe"] = st["sharpe"]
+
+    if replica_oos is not None and len(replica_oos) >= months:
+        r     = replica_oos.iloc[-months:]
+        diff  = fund_full.reindex(r.index) - r
+        ann_r = float(r.add(1).prod() ** (12 / months) - 1)
+        std_r = float(r.std() * np.sqrt(12))
+        sr_r  = ann_r / std_r if std_r > 0 else np.nan
+        result.update(
+            replica_ret=round(ann_r, 4), replica_std=round(std_r, 4),
+            tracking_error=round(float(diff.std() * np.sqrt(12)), 4),
+            replica_sharpe=round(sr_r, 2) if not np.isnan(sr_r) else None,
+        )
     return result
 
 
@@ -565,7 +576,7 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # Trailing period performance — bm_adj automatically appears as bm_adj_* keys
     periods = {}
     for label, months in [("1y", 12), ("3y", 36), ("5y", 60), ("10y", 120)]:
-        periods[label] = _trailing(months, roll_fund, roll_rep, benchmarks=benchmarks)
+        periods[label] = _trailing(months, fund_ret, roll_rep, benchmarks_full=benchmarks_full)
 
     # Cumulative series — rolling OOS; compute first so table and chart share same values
     cum_fund = (1 + roll_fund).cumprod()

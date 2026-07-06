@@ -526,6 +526,7 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
         <div class="info-row"><span class="info-label">Full name</span>         <span class="info-val" id="iLongName">—</span></div>
         <div class="info-row"><span class="info-label">Fund family</span>        <span class="info-val" id="iFundFamily">—</span></div>
         <div class="info-row"><span class="info-label">Category</span>           <span class="info-val" id="iCategory">—</span></div>
+        <div class="info-row"><span class="info-label">Benchmark selected</span> <span class="info-val" id="iBenchmark">—</span></div>
         <div class="info-row"><span class="info-label">Inception</span>          <span class="info-val" id="iInception">—</span></div>
         <div class="info-row"><span class="info-label">AUM</span>                <span class="info-val" id="iAum">—</span></div>
         <div class="info-row"><span class="info-label">Expense ratio <span style="font-size:0.7em;color:#a0aab8">(Yahoo)</span></span> <span class="info-val" id="iEr">—</span></div>
@@ -602,7 +603,7 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
         <thead>
           <tr>
             <th class="period-header">Period</th>
-            <th class="col-fund">Fund</th>
+            <th class="col-fund js-ticker-label">Fund</th>
             <th class="col-rep">Replica</th>
             <th class="col-rep">vs Replica</th>
             <th class="col-rep">Tracking Error</th>
@@ -627,12 +628,12 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
             <th class="group-header sharpe-grp group-sep" colspan="5">Sharpe Ratio</th>
           </tr>
           <tr>
-            <th class="col-fund">Fund</th>
+            <th class="col-fund js-ticker-label">Fund</th>
             <th class="col-rep">Replica</th>
             <th class="col-spy js-bm-label">SPY</th>
             <th class="col-spy js-bm-adj-label">SPY Risk-Adj</th>
             <th class="col-qqq">QQQ</th>
-            <th class="col-fund group-sep">Fund</th>
+            <th class="col-fund js-ticker-label group-sep">Fund</th>
             <th class="col-rep">Replica</th>
             <th class="col-spy js-bm-label">SPY</th>
             <th class="col-spy js-bm-adj-label">SPY Risk-Adj</th>
@@ -748,6 +749,10 @@ let _cumDataFull  = null;
 let _showIsReplica = false;
 let _bmLabel = 'SPY';
 
+function _applyTickerLabel(ticker) {
+  document.querySelectorAll('.js-ticker-label').forEach(el => el.textContent = ticker || 'Fund');
+}
+
 function _applyBmLabel(label, bm_w) {
   _bmLabel = label || 'SPY';
   const adjLabel = _bmLabel + ' Risk-Adj';
@@ -854,7 +859,7 @@ function setChips(d) {
 // ── Fund info panel ─────────────────────────────────────────────────────────────
 async function loadFundInfo(ticker) {
   document.getElementById('fundDesc').textContent = 'Loading…';
-  ['iLongName','iFundFamily','iCategory','iInception','iAum','iEr','iMsOverall','iRisk'].forEach(id => {
+  ['iLongName','iFundFamily','iCategory','iBenchmark','iInception','iAum','iEr','iMsOverall','iRisk'].forEach(id => {
     document.getElementById(id).textContent = '—';
   });
   try {
@@ -1363,7 +1368,9 @@ async function runAnalysis(ticker) {
     return;
   }
 
+  _applyTickerLabel(data.ticker);
   _applyBmLabel(data.bm_label, data.bm_w);
+  document.getElementById('iBenchmark').textContent = data.bm_label || '—';
   setChips(data);
   setFeeBanner(data);
   setOosNote(data);
