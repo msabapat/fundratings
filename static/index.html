@@ -160,6 +160,16 @@ main { padding: 24px 32px; max-width: 1520px; margin: 0 auto; }
 .grade-circle.grade-C { background: linear-gradient(145deg, #f59e0b, #b45309); }
 .grade-circle.grade-D { background: linear-gradient(145deg, #ef4444, #b91c1c); }
 .grade-circle.grade-F { background: linear-gradient(145deg, #b91c1c, #7f1d1d); }
+.grade-badges { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
+.grade-badges .grade-badge-label {
+  font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; color: #9ab0c8; text-align: center;
+}
+.grade-circle-recent {
+  width: 52px; height: 52px;
+}
+.grade-circle-recent .grade-letter { font-size: 1.15rem; }
+.grade-circle-recent .grade-score-small { font-size: 0.55rem; }
 .grade-details { flex: 1; min-width: 220px; }
 .grade-headline { font-size: 1.0rem; font-weight: 700; color: #1e2a3a; margin-bottom: 4px; }
 .grade-score-line { font-size: 0.82rem; color: #7a8ea8; margin-bottom: 6px; }
@@ -553,18 +563,28 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
     <!-- Fund Grade -->
     <div class="section-title">A New Approach to Fund Ratings</div>
     <div class="grade-card" id="gradeCard">
-      <div class="grade-circle" id="gradeCircle">
-        <span class="grade-letter" id="gradeLetter">—</span>
-        <span class="grade-score-small" id="gradeScoreSmall">—/5</span>
+      <div class="grade-badges">
+        <div class="grade-circle" id="overallGradeCircle">
+          <span class="grade-letter" id="overallGradeLetter">—</span>
+          <span class="grade-score-small" id="overallGradeScoreSmall">—/5</span>
+        </div>
+        <div class="grade-circle grade-circle-recent" id="recentGradeCircle">
+          <span class="grade-letter" id="recentGradeLetter">—</span>
+          <span class="grade-score-small" id="recentGradeScoreSmall">—/5</span>
+        </div>
       </div>
       <div class="grade-details">
         <div class="grade-headline">Active Fund Assessment</div>
-        <div class="grade-score-line">Score: <strong id="gradeScoreMain">—</strong> / 5</div>
-        <div class="grade-desc" id="gradeDesc">—</div>
+        <div class="grade-score-line">
+          Overall: <strong id="overallGradeScoreMain">—</strong> / 5
+          &nbsp;&bull;&nbsp;
+          Recent: <strong id="recentGradeScoreMain">—</strong> / 5
+        </div>
+        <div class="grade-desc"><strong>Overall</strong> — <span id="overallGradeDesc">—</span></div>
+        <div class="grade-desc"><strong>Recent</strong> — <span id="recentGradeDesc">—</span></div>
         <div class="grade-method">
-          Score based on weighted-avg Sharpe: fund vs 50/50 blend of replica &amp; risk-adj <span class="js-bm-label">SPY</span>.
-          Period weights: 10yr 35%, Full 20%, 5yr 15%, 3yr 15%, 1yr 15%.
-          5.0 = outperforms blend by &ge;+0.10 Sharpe &bull; 3.0 = matches &bull; 1.0 = trails by &ge;0.10.
+          Overall = 60% last 5yrs + 25% yrs 6&ndash;10 + 15% 10yrs+. Recent = 70% last 3yrs + 30% yrs 4&ndash;5.
+          Each period blends 60% out-of-sample replica &bull; 25% single-ETF benchmark &bull; 15% in-sample replica (Sharpe diff).
           A (&ge;4.7) &rarr; A&minus; (4.4) &rarr; B+ (4.1) &rarr; B (3.8) &rarr; B&minus; (3.4) &rarr;
           C+ (3.1) &rarr; C (2.8) &rarr; C&minus; (2.4) &rarr; D+ (2.0) &rarr; D (1.6) &rarr; F (&lt;1.6).
         </div>
@@ -909,16 +929,23 @@ const GRADE_DESCS = {
   'F':   'Failing — significantly and consistently underperforms both benchmarks across all periods.',
 };
 
-function displayGrade(grade) {
+function _displayOneGrade(prefix, grade) {
+  if (!grade) return;
   const { score, grade: letter } = grade;
   const firstChar = letter[0];   // A, B, C, D, or F
+  const extraClass = prefix === 'recent' ? ' grade-circle-recent' : '';
 
-  const circle = document.getElementById('gradeCircle');
-  circle.className = `grade-circle grade-${firstChar}`;
-  document.getElementById('gradeLetter').textContent      = letter;
-  document.getElementById('gradeScoreSmall').textContent  = score + '/5';
-  document.getElementById('gradeScoreMain').textContent   = score;
-  document.getElementById('gradeDesc').textContent = grade.desc || (GRADE_DESCS[letter] || '').replace(/SPY/g, _bmLabel);
+  const circle = document.getElementById(`${prefix}GradeCircle`);
+  circle.className = `grade-circle${extraClass} grade-${firstChar}`;
+  document.getElementById(`${prefix}GradeLetter`).textContent     = letter;
+  document.getElementById(`${prefix}GradeScoreSmall`).textContent = score + '/5';
+  document.getElementById(`${prefix}GradeScoreMain`).textContent  = score;
+  document.getElementById(`${prefix}GradeDesc`).textContent = grade.desc || (GRADE_DESCS[letter] || '').replace(/SPY/g, _bmLabel);
+}
+
+function displayGrade(overallGrade, recentGrade) {
+  _displayOneGrade('overall', overallGrade);
+  _displayOneGrade('recent', recentGrade);
 }
 
 // ── OOS note ───────────────────────────────────────────────────────────────────
@@ -938,15 +965,15 @@ function setOosNote(d) {
 }
 
 // ── Performance tables ─────────────────────────────────────────────────────────
-const LABELS = { '1y':'1 Year','3y':'3 Years','5y':'5 Years','10y':'10 Years','full':'Full OOS Period','full_hist':'Full History','wtd_avg':'Weighted Avg' };
+const LABELS = { '1y':'1 Year','3y':'3 Years','5y':'5 Years','10y':'10 Years','full':'Full OOS Period','full_hist':'Full History','overall':'Overall','recent':'Recent' };
 
 function buildTables(periods) {
   const retBody  = document.getElementById('retBody');
   const riskBody = document.getElementById('riskBody');
   retBody.innerHTML = riskBody.innerHTML = '';
 
-  ['1y','3y','5y','10y','full','full_hist','wtd_avg'].forEach(key => {
-    const isWtd = key === 'wtd_avg';
+  ['1y','3y','5y','10y','full','full_hist','overall','recent'].forEach(key => {
+    const isWtd = key === 'overall' || key === 'recent';
     const p     = periods[key];
     const label = p?.label || LABELS[key];
 
@@ -1340,7 +1367,7 @@ async function runAnalysis(ticker) {
   setChips(data);
   setFeeBanner(data);
   setOosNote(data);
-  if (data.grade) displayGrade(data.grade);
+  displayGrade(data.overall_grade, data.recent_grade);
   buildTables(data.periods);
 
   _cumData     = data.cumulative;
@@ -1499,8 +1526,8 @@ const BROWSE_COLS_FULL = [
   { key:'aum_millions',    label:'AUM',    num:true },
   { key:'expense_ratio',   label:'ER',     num:true },
   { key:'single_etf_benchmark', label:'Benchmark' },
-  { key:'recent_grade',    label:'Recent',  num:true },
   { key:'overall_grade',   label:'Overall', num:true },
+  { key:'recent_grade',    label:'Recent',  num:true },
   { key:'peer_percentile', label:'Peer %', num:true },
   { key:'wtd_alpha',       label:'Alpha',  num:true },
   { key:'wtd_info_ratio',  label:'Info Ratio', num:true },
@@ -1627,8 +1654,8 @@ function renderBrowseTable(rows) {
       <td class="num-cell">${fmtAum(r.aum_millions)}</td>
       <td class="num-cell">${fmtErPct(r.expense_ratio)}</td>
       <td>${bmLabel}${bmWarn}</td>
-      <td class="num-cell">${recentCell}</td>
       <td class="num-cell">${overallCell}</td>
+      <td class="num-cell">${recentCell}</td>
       <td class="num-cell">${fmtPeer(r.peer_percentile)}</td>
       <td class="num-cell">${fmtAlpha(r.wtd_alpha)}</td>
       <td class="num-cell">${r.wtd_info_ratio != null ? r.wtd_info_ratio.toFixed(2) : '—'}</td>

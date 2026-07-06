@@ -64,6 +64,24 @@ def _batch_summary_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
     return set(con.execute("PRAGMA table_info('batch_summary')").df()["name"])
 
 
+def get_grade_v2(ticker: str) -> dict | None:
+    """Precomputed Recent/Overall grade for one ticker, or None if not batch-graded."""
+    con = _con()
+    try:
+        available = _batch_summary_columns(con)
+        if "recent_grade" not in available or "overall_grade" not in available:
+            return None
+        row = con.execute(
+            "SELECT recent_grade, overall_grade FROM batch_summary WHERE ticker = ?",
+            [ticker],
+        ).fetchone()
+    finally:
+        con.close()
+    if row is None or (row[0] is None and row[1] is None):
+        return None
+    return {"recent_grade": row[0], "overall_grade": row[1]}
+
+
 def list_browse_funds() -> list[dict]:
     """
     Primary share class of every analysed fund, joined with its batch_summary

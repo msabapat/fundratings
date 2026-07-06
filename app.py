@@ -18,7 +18,7 @@ import config as cfg
 import universe_data
 from data     import load_etf_returns, load_fund_returns, load_tbill_monthly, align
 from analysis import constrained_ols, rolling_replication
-from grade_v2 import select_best_single_etf, _greedy_topk
+from grade_v2 import select_best_single_etf, _greedy_topk, live_weighted_periods
 
 app = Flask(__name__, static_folder="static")
 ANALYSIS_CACHE_PATH = Path(__file__).parent / "analysis_cache.json"
@@ -160,131 +160,60 @@ def _grade_description(f_sr, r_sr, b_sr, bm_label: str = "benchmark") -> str:
     return "Fund " + "; ".join(parts) + "."
 
 
-def _fund_grade(periods: dict, bm_label: str = "benchmark") -> dict:
+_GRADE_LETTER_THRESHOLDS = [
+    (4.7, "A"), (4.4, "A-"), (4.1, "B+"), (3.8, "B"),
+    (3.4, "B-"), (3.1, "C+"), (2.8, "C"), (2.4, "C-"),
+    (2.0, "D+"), (1.6, "D"),
+]
+
+
+def _letter_for_score(score: float) -> str:
+    for t, g in _GRADE_LETTER_THRESHOLDS:
+        if score >= t:
+            return g
+    return "F"
+
+
+def _grade_obj(score: float | None, period: dict | None, bm_label: str) -> dict | None:
+    """{score, grade (letter), desc} for one of the Overall/Recent scores, built
+    from the corresponding live period row (same shape _grade_description expects)."""
+    if score is None:
+        return None
+    score = round(score, 1)
+    p = period or {}
+    desc = _grade_description(p.get("fund_sharpe"), p.get("replica_sharpe"),
+                              p.get("bm_adj_sharpe"), bm_label)
+    return {"score": score, "grade": _letter_for_score(score), "desc": desc}
+
+
+def _live_score_from_period(period: dict | None) -> float | None:
     """
-    Multi-period weighted grade on a 1–5 scale.
-    Uses GRADE_TIME_WEIGHTS, GRADE_BLEND_REP_WT, GRADE_HIGH_DIFF, GRADE_LOW_DIFF from config.
-    Score 5.0 = fund Sharpe exceeds 50/50 blend of (replica, bm_adj) by +GRADE_HIGH_DIFF.
-    Score 3.0 = even; 1.0 = trails by GRADE_LOW_DIFF. Linear interpolation in between.
-    Also returns wtd_avg metrics dict for the weighted-average table row.
+    Fallback scorer for tickers not yet in the batch_summary Recent/Overall
+    grade (e.g. funds outside the RBSA universe) -- same GRADE_HIGH_DIFF/
+    GRADE_LOW_DIFF absolute band as the batch grading, applied to a 50/50
+    fund-Sharpe-vs-(replica, bm_adj) blend. Less rigorous than grade_v2.py's
+    population-calibrated bands (no per-bucket OOS weighting, no low-vol
+    carve-out), but keeps the score card populated instead of blank.
     """
-    TW = cfg.GRADE_TIME_WEIGHTS
-
-    _metric_keys = [
-        'fund_ret', 'replica_ret', 'fund_std', 'replica_std', 'tracking_error',
-        'fund_sharpe', 'replica_sharpe',
-        'spy_ret', 'spy_std', 'spy_sharpe',
-        'bm_adj_ret', 'bm_adj_std', 'bm_adj_sharpe',
-        'qqq_ret', 'qqq_std', 'qqq_sharpe',
-    ]
-
-    # Redistribute weight from missing periods to 'full' so a fund with only
-    # 3 years of history doesn't silently drop 60% of the scoring weight.
-    eff_weights: dict[str, float] = {}
-    spill = 0.0
-    for key, tw in TW.items():
-        if periods.get(key):
-            eff_weights[key] = tw
-        else:
-            spill += tw
-    if spill > 0:
-        if "full_hist" in eff_weights:
-            eff_weights["full_hist"] += spill
-        elif "full" in eff_weights:
-            eff_weights["full"] += spill
-        else:
-            # neither full-history bucket is present — spread spill across whatever is present
-            present = list(eff_weights)
-            if present:
-                per = spill / len(present)
-                for k in present:
-                    eff_weights[k] += per
-
-    wtd_sums = {k: 0.0 for k in _metric_keys}
-    wtd_wts  = {k: 0.0 for k in _metric_keys}
-
-    for key, tw in eff_weights.items():
-        p = periods.get(key)
-        if not p:
-            continue
-        for mk in _metric_keys:
-            v = p.get(mk)
-            if v is not None:
-                wtd_sums[mk] += tw * v
-                wtd_wts[mk]  += tw
-
-    wtd_avg = {
-        mk: (round(wtd_sums[mk] / wtd_wts[mk], 4) if wtd_wts[mk] > 0 else None)
-        for mk in _metric_keys
-    }
-
-    # Scoring
-    f_sr     = wtd_avg.get('fund_sharpe')
-    r_sr     = wtd_avg.get('replica_sharpe')
-    b_sr     = wtd_avg.get('bm_adj_sharpe')
-    blend_wt = cfg.GRADE_BLEND_REP_WT
-
+    if not period:
+        return None
+    f_sr = period.get("fund_sharpe")
+    r_sr = period.get("replica_sharpe")
+    b_sr = period.get("bm_adj_sharpe")
+    if f_sr is None:
+        return None
     if r_sr is not None and b_sr is not None:
-        blend_sr = blend_wt * r_sr + (1.0 - blend_wt) * b_sr
+        blend_sr = cfg.GRADE_BLEND_REP_WT * r_sr + (1.0 - cfg.GRADE_BLEND_REP_WT) * b_sr
     elif r_sr is not None:
         blend_sr = r_sr
     elif b_sr is not None:
         blend_sr = b_sr
     else:
-        blend_sr = None
-
-    diff  = (f_sr - blend_sr) if (f_sr is not None and blend_sr is not None) else 0.0
-    HIGH  = cfg.GRADE_HIGH_DIFF
-    LOW   = cfg.GRADE_LOW_DIFF
-
-    if diff >= HIGH:
-        score = 5.0
-    elif diff <= LOW:
-        score = 1.0
-    elif diff >= 0:
-        score = 3.0 + 2.0 * diff / HIGH
-    else:
-        score = 3.0 + 2.0 * diff / abs(LOW)
-    score = max(1.0, min(5.0, score))
-
-    # "Closet index" penalty — a high full-history R² against a single static passive
-    # blend means the fund hasn't changed style/allocation much over its life, so a
-    # buy-and-hold mix would have replicated it just as well. Applied independently
-    # of the Sharpe-diff score above, since a decent Sharpe diff can still just be
-    # noise within an otherwise static style.
-    r2_full = (periods.get("full_hist") or {}).get("r_squared")
-    r2_penalty = 0.0
-    if r2_full is not None and r2_full > cfg.GRADE_R2_PENALTY_THRESHOLD:
-        r2_penalty = (cfg.GRADE_R2_PENALTY_MAX
-                      * (r2_full - cfg.GRADE_R2_PENALTY_THRESHOLD)
-                      / (1.0 - cfg.GRADE_R2_PENALTY_THRESHOLD))
-    score = round(max(1.0, min(5.0, score - r2_penalty)), 1)
-
-    thresholds = [
-        (4.7, "A"), (4.4, "A-"), (4.1, "B+"), (3.8, "B"),
-        (3.4, "B-"), (3.1, "C+"), (2.8, "C"), (2.4, "C-"),
-        (2.0, "D+"), (1.6, "D"),
-    ]
-    grade = "F"
-    for t, g in thresholds:
-        if score >= t:
-            grade = g
-            break
-
-    desc = _grade_description(f_sr, r_sr, b_sr, bm_label)
-    if r2_penalty > 0.05:
-        desc += (f" Full-history returns are {r2_full*100:.0f}% explained by a static "
-                 f"passive blend (R²) — a {r2_penalty:.1f}-pt deduction reflects "
-                 f"limited style differentiation from a buy-and-hold alternative.")
-
-    return {
-        "score":          score,
-        "grade":          grade,
-        "desc":           desc,
-        "wtd_avg":        wtd_avg,
-        "r_squared_full": r2_full,
-        "r2_penalty":     round(r2_penalty, 2),
-    }
+        return None
+    diff  = f_sr - blend_sr
+    HIGH, LOW = cfg.GRADE_HIGH_DIFF, cfg.GRADE_LOW_DIFF
+    score = 1.0 + 4.0 * (diff - LOW) / (HIGH - LOW)
+    return max(1.0, min(5.0, score))
 
 
 def _replica_er(weights: dict) -> float:
@@ -704,6 +633,18 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         periods["full_hist"][f"{key}_std"]    = st["std"]
         periods["full_hist"][f"{key}_sharpe"] = st["sharpe"]
 
+    # Overall/Recent weighted-avg rows -- same non-overlapping year buckets and
+    # comparators (single-ETF benchmark, IS-3ETF replica) used for the fund's
+    # Overall/Recent grade, so this table is consistent with the score shown above
+    # instead of the old GRADE_TIME_WEIGHTS-based "Weighted Avg" row.
+    _live_bm = bm_override.upper() if bm_override else _cat_bm
+    _live_periods = live_weighted_periods(fund_ret, etf_full, _live_bm or None,
+                                          _get_tbill_monthly(), _etf_ret_raw)
+    for _k in ("overall", "recent"):
+        if _live_periods.get(_k):
+            periods[_k] = {kk: (round(vv, 4) if isinstance(vv, float) else vv)
+                           for kk, vv in _live_periods[_k].items()}
+
     # Weights dict (full IS, sorted descending)
     weights = {
         etf_aligned.columns[i]: round(float(w[i]), 4)
@@ -716,12 +657,18 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     fund_er    = meta.get("er") or 0.0075
     fee_saving = round(fund_er - rep_er, 4)
 
-    # Fund grade — multi-period weighted (all periods passed, function handles NaNs)
-    grade = _fund_grade(periods, bm_label)
-    # Move weighted-average row into periods so the frontend table can render it
-    wtd_avg = grade.pop("wtd_avg", None)
-    if wtd_avg:
-        periods["wtd_avg"] = wtd_avg
+    # Fund grade — prefer the batch-precomputed Overall/Recent grade (same
+    # numbers shown in the Browse Universe table); fall back to a live score
+    # from the periods just computed for tickers outside the RBSA batch.
+    _batch_grades = universe_data.get_grade_v2(ticker) or {}
+    _overall_score = _batch_grades.get("overall_grade")
+    _recent_score  = _batch_grades.get("recent_grade")
+    if _overall_score is None:
+        _overall_score = _live_score_from_period(periods.get("overall"))
+    if _recent_score is None:
+        _recent_score = _live_score_from_period(periods.get("recent"))
+    overall_grade = _grade_obj(_overall_score, periods.get("overall"), bm_label)
+    recent_grade  = _grade_obj(_recent_score,  periods.get("recent"),  bm_label)
 
     # Monthly OOS returns — used by frontend to compute rolling trailing returns
     monthly_oos = dict(
@@ -805,7 +752,8 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
             benchmark_ticker = bm_label_chart,
         ),
         cumulative_full = cumulative_full,
-        grade    = grade,
+        overall_grade = overall_grade,
+        recent_grade  = recent_grade,
         bm_label = bm_label,
         bm_w     = bm_w,      # vol-scaling factor, e.g. 0.62 → "62% SPY + 38% T-bill"
     )

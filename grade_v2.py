@@ -358,6 +358,98 @@ def blend_buckets(bucket_vals: dict[str, float], weights: dict[str, float]) -> f
     return sum(bucket_vals[k] * (w / tot) for k, w in eff.items())
 
 
+# ── Live per-bucket raw stats (for the per-fund detail page's Overall/Recent
+# weighted-avg rows -- same bucket definitions and comparators as the grade,
+# but exposing ann_ret/vol/sharpe directly instead of just the blended diff) ──
+
+def _ann_vol_sharpe(s: pd.Series, tbill: pd.Series) -> tuple[float, float, float | None]:
+    n = len(s)
+    ann = float((1 + s).prod() ** (12 / n) - 1)
+    vol = float(s.std() * np.sqrt(12))
+    return ann, vol, _sharpe_excess(s, tbill)
+
+
+def bucket_raw_stats(fund_sub: pd.Series, etf_sub: pd.DataFrame, bm_ticker: str | None,
+                      start_mo: int, end_mo: int | None, tbill: pd.Series,
+                      etf_ret_raw: pd.DataFrame) -> dict | None:
+    """
+    Fund / IS-3ETF-replica / single-benchmark (vol-matched "bm_adj") / QQQ
+    ann_ret, vol, sharpe for one non-overlapping bucket -- the same comparators
+    used for grading, in the shape the detail page's Returns/Risk tables expect
+    (benchmark aliased to "spy_*" keys, matching how the rest of the page
+    already aliases whatever benchmark is selected into that key name).
+    """
+    sl = _slice_bucket(fund_sub, etf_sub, start_mo, end_mo)
+    if sl is None:
+        return None
+    bucket_f, bucket_etf = sl
+    if len(bucket_f) < 12:
+        return None
+
+    out: dict = {}
+    out["fund_ret"], out["fund_std"], out["fund_sharpe"] = _ann_vol_sharpe(bucket_f, tbill)
+
+    cw = _clean_window(bucket_f, bucket_etf)
+    if cw is not None:
+        f_s, etf_s = cw
+        res3 = _greedy_topk(f_s.values, etf_s.values, 3)
+        if res3 is not None:
+            idx, w = res3
+            rep_series = pd.Series(etf_s.values[:, idx] @ w, index=f_s.index)
+            out["replica_ret"], out["replica_std"], out["replica_sharpe"] = _ann_vol_sharpe(rep_series, tbill)
+            diff = f_s.values - rep_series.reindex(f_s.index).values
+            out["tracking_error"] = float(np.nanstd(diff) * np.sqrt(12))
+
+    if bm_ticker and bm_ticker in bucket_etf.columns:
+        bm_s = bucket_etf[bm_ticker].dropna()
+        f_aligned = bucket_f.reindex(bm_s.index).dropna()
+        bm_aligned = bm_s.reindex(f_aligned.index).dropna()
+        if len(f_aligned) >= 12:
+            out["spy_ret"], out["spy_std"], out["spy_sharpe"] = _ann_vol_sharpe(bm_aligned, tbill)
+            fund_vol = float(f_aligned.std() * np.sqrt(12))
+            if out["spy_std"] > 0:
+                bm_w = fund_vol / out["spy_std"]
+                rf = tbill.reindex(bm_aligned.index).ffill().fillna(0)
+                bm_adj_series = bm_w * bm_aligned + (1.0 - bm_w) * rf
+                out["bm_adj_ret"], out["bm_adj_std"], out["bm_adj_sharpe"] = _ann_vol_sharpe(bm_adj_series, tbill)
+
+    if "QQQ" in etf_ret_raw.columns:
+        qqq_s = etf_ret_raw["QQQ"].reindex(bucket_f.index).ffill().dropna()
+        f_aligned_q = bucket_f.reindex(qqq_s.index).dropna()
+        if len(f_aligned_q) >= 12:
+            qqq_aligned = qqq_s.reindex(f_aligned_q.index)
+            out["qqq_ret"], out["qqq_std"], out["qqq_sharpe"] = _ann_vol_sharpe(qqq_aligned, tbill)
+
+    return out
+
+
+def blend_bucket_stats(bucket_stats: dict[str, dict], weights: dict[str, float]) -> dict:
+    """Weighted-average every numeric field across buckets (spill redistributed
+    to whichever buckets have that specific field, matching blend_buckets)."""
+    all_keys = {k for stats in bucket_stats.values() if stats for k in stats}
+    result: dict = {}
+    for key in all_keys:
+        vals = {b: stats[key] for b, stats in bucket_stats.items()
+                if stats and stats.get(key) is not None}
+        eff = {b: w for b, w in weights.items() if b in vals}
+        if not eff:
+            continue
+        tot = sum(eff.values())
+        result[key] = sum(vals[b] * (w / tot) for b, w in eff.items())
+    return result
+
+
+def live_weighted_periods(fund_sub: pd.Series, etf_sub: pd.DataFrame, bm_ticker: str | None,
+                           tbill: pd.Series, etf_ret_raw: pd.DataFrame) -> dict[str, dict]:
+    """Returns {"overall": {...}, "recent": {...}} in the detail page's period-row shape."""
+    stats = {b: bucket_raw_stats(fund_sub, etf_sub, bm_ticker, start_mo, end_mo, tbill, etf_ret_raw)
+              for b, (start_mo, end_mo) in BUCKETS.items()}
+    return {
+        "overall": blend_bucket_stats(stats, OVERALL_WEIGHTS),
+        "recent":  blend_bucket_stats(stats, RECENT_WEIGHTS),
+    }
+
+
 # ── Population-calibrated scoring bands ──────────────────────────────────────
 
 def fit_band(diffs: pd.Series) -> tuple[float, float]:
