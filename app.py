@@ -360,8 +360,9 @@ def fund_info(ticker: str):
         return jsonify(result)
 
     import yfinance as yf
+    from data import _with_timeout
     try:
-        info = yf.Ticker(ticker).info
+        info = _with_timeout(lambda: yf.Ticker(ticker).info)
         # Convert inception timestamp to date string if present
         incep = info.get("fundInceptionDate")
         if incep:

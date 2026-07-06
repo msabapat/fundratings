@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 import warnings
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,36 @@ DB_PATH             = Path(__file__).parent / "etf_prices.duckdb"
 PARQUET_PATH        = Path(__file__).parent / "etf_returns.parquet"
 FUND_PARQUET_PATH   = Path(__file__).parent / "fund_returns.parquet"
 TBILL_PARQUET_PATH  = Path(__file__).parent / "tbill_returns.parquet"
+
+YFINANCE_TIMEOUT_SEC = 15  # hard wall-clock cap on any single yfinance call
+
+# Long-lived, never shut down -- if this were created per-call via
+# `with ThreadPoolExecutor(...) as ex:`, the executor's __exit__ calls
+# shutdown(wait=True), which BLOCKS until the submitted task finishes even
+# after future.result(timeout=...) has already given up. That defeats the
+# entire point: the caller would still hang for the full duration of a stuck
+# yfinance call, just with a slightly different stack trace. A persistent
+# pool lets the timed-out background thread keep running (and eventually die
+# on its own, or leak harmlessly if it never returns) while the calling
+# request thread is freed immediately.
+_YF_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="yfinance")
+
+
+def _with_timeout(fn, *args, timeout=YFINANCE_TIMEOUT_SEC, **kwargs):
+    """
+    yfinance's requests session has no default timeout, so a slow/blocked
+    connection (Yahoo increasingly rate-limits or silently stalls requests
+    from cloud-provider IPs) can hang forever -- and since the app runs on a
+    single gunicorn worker with a handful of threads, a few stuck requests
+    degrade the whole site for every other visitor, not just the one who
+    asked for the missing ticker. Runs the call on the shared background
+    pool and gives up (raising TimeoutError) if it doesn't finish in time.
+    """
+    future = _YF_EXECUTOR.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout)
+    except _FutureTimeoutError:
+        raise TimeoutError(f"yfinance call timed out after {timeout}s") from None
 
 
 def _eom_prices_from_db(tickers: list[str], start: str, end: str) -> pd.DataFrame:
@@ -75,7 +106,7 @@ def load_tbill_monthly() -> pd.Series:
         return df["tbill"]
 
     import yfinance as yf
-    hist = yf.Ticker("^IRX").history(start="2000-01-01", auto_adjust=False)
+    hist = _with_timeout(lambda: yf.Ticker("^IRX").history(start="2000-01-01", auto_adjust=False))
     hist.index = hist.index.tz_localize(None)
     s = (hist["Close"] / 100 / 12).resample("ME").last()
     return s.rename("tbill")
@@ -113,7 +144,7 @@ def load_fund_returns(
         import yfinance as yf
         for t in need_yfinance:
             try:
-                hist = yf.Ticker(t).history(start=start, end=end, auto_adjust=True)
+                hist = _with_timeout(lambda t=t: yf.Ticker(t).history(start=start, end=end, auto_adjust=True))
                 if len(hist) < 24:
                     warnings.warn(f"{t}: only {len(hist)} daily rows — skipping", stacklevel=2)
                     continue
