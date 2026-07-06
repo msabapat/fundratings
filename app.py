@@ -18,7 +18,7 @@ import config as cfg
 import universe_data
 from data     import load_etf_returns, load_fund_returns, load_tbill_monthly, align
 from analysis import constrained_ols, rolling_replication
-from grade_v2 import select_best_single_etf, _greedy_topk, live_weighted_periods
+from grade_v2 import select_best_single_etf, _greedy_topk, live_weighted_periods, _full_period_matrices
 
 app = Flask(__name__, static_folder="static")
 ANALYSIS_CACHE_PATH = Path(__file__).parent / "analysis_cache.json"
@@ -84,11 +84,18 @@ def _get_etf_returns() -> pd.DataFrame:
     if _etf_returns is None:
         with _etf_lock:
             if _etf_returns is None:
-                _etf_returns = load_etf_returns(
-                    list(cfg.PASSIVE_ETFS.keys()),
-                    start=cfg.DEFAULT_START,
-                    end=cfg.DEFAULT_END,
-                )
+                try:
+                    _etf_returns = universe_data.load_etf_returns_db()
+                except Exception:
+                    # DB unavailable (e.g. local dev without fund_universe.duckdb) --
+                    # fall back to the parquet snapshot. Benchmark selection may then
+                    # disagree slightly with the batch grade for the reason documented
+                    # on load_etf_returns_db().
+                    _etf_returns = load_etf_returns(
+                        list(cfg.PASSIVE_ETFS.keys()),
+                        start=cfg.DEFAULT_START,
+                        end=cfg.DEFAULT_END,
+                    )
     return _etf_returns
 
 
@@ -225,6 +232,15 @@ def _live_score_from_period(period: dict | None) -> float | None:
     HIGH, LOW = cfg.GRADE_HIGH_DIFF, cfg.GRADE_LOW_DIFF
     score = 1.0 + 4.0 * (diff - LOW) / (HIGH - LOW)
     return max(1.0, min(5.0, score))
+
+
+def _etf_name(ticker: str) -> str:
+    """Plain-English name for an ETF, e.g. 'BND' -> 'Total US Bond' (strips
+    the '(Provider, ER%)' suffix from the config.py description)."""
+    desc = cfg.PASSIVE_ETFS.get(ticker) or cfg.ACTIVE_ETFS.get(ticker)
+    if not desc:
+        return ticker
+    return desc.split("(")[0].strip()
 
 
 def _replica_er(weights: dict) -> float:
@@ -390,6 +406,12 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         return _fund_cache[cache_key]
 
     etf_ret = _get_etf_returns()
+    if ticker in etf_ret.columns:
+        # A handful of active ETFs (ARKK etc.) that a user can analyze directly
+        # are also members of the 85-ETF replication candidate universe --
+        # drop self from the candidates so align()/select_best_single_etf don't
+        # choke on a column colliding with the fund series itself.
+        etf_ret = etf_ret.drop(columns=[ticker])
 
     _umeta = _get_universe_meta().get(ticker)
 
@@ -426,12 +448,27 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     fund_ret, etf_full = align(fund_raw, etf_ret)
     _etf_ret_raw = _get_etf_returns()
 
-    # Best single-ETF benchmark: the SAME composite score (40% annual-return
-    # RMSE match, 35% volatility match, 25% correlation, then an expense-ratio
-    # tie-break) used to grade this fund in grade_v2.py, instead of a separate
-    # category-map / RMSE-only cascade -- so the benchmark shown here always
-    # matches the one the fund's Recent/Overall grade was computed against.
-    if not bm_override:
+    # Which tickers get selected (best single benchmark, top-3 replica) is
+    # decided using grade_v2's OWN alignment (_full_period_matrices) rather
+    # than data.py's align() -- the two apply different NaN/coverage
+    # thresholds, so even reading the same tables they could hand
+    # select_best_single_etf a slightly different date range and land on a
+    # different "best" ETF than the batch grade actually used. The selected
+    # tickers are then applied to the existing align()-based etf_full below,
+    # so the actual fit/chart data keeps its original row alignment.
+    _gv2 = _full_period_matrices(fund_raw.dropna(), etf_ret)
+    _top3_tickers: list[str] | None = None
+    if _gv2 is not None:
+        _f_full_gv2, _etf_full_gv2 = _gv2
+        if not bm_override:
+            _cat_bm, _ = select_best_single_etf(_f_full_gv2, _etf_full_gv2)
+            _cat_bm = _cat_bm or ""
+        else:
+            _cat_bm = ""
+        _top3_gv2 = _greedy_topk(_f_full_gv2.values, _etf_full_gv2.values, 3)
+        if _top3_gv2 is not None:
+            _top3_tickers = [_etf_full_gv2.columns[i] for i in _top3_gv2[0]]
+    elif not bm_override:
         _cat_bm, _ = select_best_single_etf(fund_ret, etf_full)
         _cat_bm = _cat_bm or ""
     else:
@@ -441,8 +478,11 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # full history) used for the IS/OOS replica components of the grade --
     # a full-85-ETF fit barely improves on 3 (see grade_v2.py docstring) but
     # is much harder to read as "what does this fund actually look like".
-    _top3 = _greedy_topk(fund_ret.values, etf_full.values, 3)
-    etf_aligned = etf_full.iloc[:, _top3[0]] if _top3 is not None else etf_full
+    if _top3_tickers and all(t in etf_full.columns for t in _top3_tickers):
+        etf_aligned = etf_full[_top3_tickers]
+    else:
+        _top3 = _greedy_topk(fund_ret.values, etf_full.values, 3)
+        etf_aligned = etf_full.iloc[:, _top3[0]] if _top3 is not None else etf_full
 
     # Full-IS constrained regression (weights for the pie/bar chart)
     w          = constrained_ols(fund_ret.values, etf_aligned.values,
@@ -766,6 +806,7 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         overall_grade = overall_grade,
         recent_grade  = recent_grade,
         bm_label = bm_label,
+        bm_name  = _etf_name(bm_label),
         bm_w     = bm_w,      # vol-scaling factor, e.g. 0.62 → "62% SPY + 38% T-bill"
     )
 

@@ -64,6 +64,25 @@ def _batch_summary_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
     return set(con.execute("PRAGMA table_info('batch_summary')").df()["name"])
 
 
+def load_etf_returns_db() -> pd.DataFrame:
+    """
+    ETF monthly returns straight from fund_universe.duckdb's etf_returns table --
+    the SAME source grade_v2.py's batch pipeline uses for benchmark selection.
+    app.py used to load this from a separately-maintained parquet snapshot
+    (data.py's load_etf_returns), which drifted out of sync with this table
+    over time and made the live detail page pick a different "best" benchmark
+    than the one a fund was actually graded against.
+    """
+    con = _con()
+    try:
+        df = con.execute("SELECT date, ticker, return_monthly FROM etf_returns ORDER BY date").df()
+    finally:
+        con.close()
+    wide = df.pivot(index="date", columns="ticker", values="return_monthly")
+    wide.index = pd.to_datetime(wide.index)
+    return wide.sort_index()
+
+
 def get_grade_v2(ticker: str) -> dict | None:
     """Precomputed Recent/Overall grade for one ticker, or None if not batch-graded."""
     con = _con()

@@ -400,8 +400,13 @@ def bucket_raw_stats(fund_sub: pd.Series, etf_sub: pd.DataFrame, bm_ticker: str 
             diff = f_s.values - rep_series.reindex(f_s.index).values
             out["tracking_error"] = float(np.nanstd(diff) * np.sqrt(12))
 
-    if bm_ticker and bm_ticker in bucket_etf.columns:
-        bm_s = bucket_etf[bm_ticker].dropna()
+    # bm_ticker may not survive etf_sub's coverage filtering (e.g. it wasn't
+    # picked as one of this fund's valid RBSA candidates) even though it has
+    # perfectly good standalone history -- fall back to the raw ETF universe,
+    # same as the older trailing-period code path already does.
+    _bm_src = bucket_etf if (bm_ticker and bm_ticker in bucket_etf.columns) else etf_ret_raw
+    if bm_ticker and bm_ticker in _bm_src.columns:
+        bm_s = _bm_src[bm_ticker].reindex(bucket_f.index).ffill().dropna()
         f_aligned = bucket_f.reindex(bm_s.index).dropna()
         bm_aligned = bm_s.reindex(f_aligned.index).dropna()
         if len(f_aligned) >= 12:
