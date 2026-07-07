@@ -155,11 +155,9 @@ main { padding: 24px 32px; max-width: 1520px; margin: 0 auto; }
 }
 .grade-letter { font-size: 1.8rem; font-weight: 800; line-height: 1; }
 .grade-score-small { font-size: 0.65rem; opacity: 0.85; margin-top: 2px; letter-spacing: 0.3px; }
-.grade-circle.grade-A { background: linear-gradient(145deg, #10b981, #0a7a50); }
-.grade-circle.grade-B { background: linear-gradient(145deg, #3b82f6, #1d4ed8); }
-.grade-circle.grade-C { background: linear-gradient(145deg, #f59e0b, #b45309); }
-.grade-circle.grade-D { background: linear-gradient(145deg, #ef4444, #b91c1c); }
-.grade-circle.grade-F { background: linear-gradient(145deg, #b91c1c, #7f1d1d); }
+/* Circle background color is set inline via gradeBgStyle() -- a continuous
+   red(1)->yellow(3)->green(5) HSL scale shared with the browse-table pills,
+   so the same numeric score reads as the same color everywhere on the site. */
 .grade-badges { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
 .grade-badges .grade-badge-label {
   font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
@@ -409,12 +407,8 @@ th.sharpe-grp { background: #ecfdf4 !important; color: #065f46 !important; }
   display: inline-block; min-width: 30px; text-align: center; padding: 2px 8px;
   border-radius: 12px; font-size: 0.76rem; font-weight: 700; color: #fff;
 }
-.grade-pill.g5 { background: linear-gradient(145deg, #10b981, #0a7a50); }
-.grade-pill.g4 { background: linear-gradient(145deg, #34a25b, #15803d); }
-.grade-pill.g3 { background: linear-gradient(145deg, #3b82f6, #1d4ed8); }
-.grade-pill.g2 { background: linear-gradient(145deg, #f59e0b, #b45309); }
-.grade-pill.g1 { background: linear-gradient(145deg, #ef4444, #b91c1c); }
-.grade-pill.gna { background: #94a3b8; }
+/* Pill background color is set inline via gradeBgStyle() -- same continuous
+   red(1)->yellow(3)->green(5) scale as the fund-detail grade circles. */
 
 #browseSummaryBar {
   display: none; align-items: center; gap: 14px; margin-bottom: 16px;
@@ -937,11 +931,11 @@ const GRADE_DESCS = {
 function _displayOneGrade(prefix, grade) {
   if (!grade) return;
   const { score, grade: letter } = grade;
-  const firstChar = letter[0];   // A, B, C, D, or F
   const extraClass = prefix === 'recent' ? ' grade-circle-recent' : '';
 
   const circle = document.getElementById(`${prefix}GradeCircle`);
-  circle.className = `grade-circle${extraClass} grade-${firstChar}`;
+  circle.className = `grade-circle${extraClass}`;
+  circle.style = gradeBgStyle(score);
   document.getElementById(`${prefix}GradeLetter`).textContent     = letter;
   document.getElementById(`${prefix}GradeScoreSmall`).textContent = score + '/5';
   document.getElementById(`${prefix}GradeScoreMain`).textContent  = score;
@@ -1518,9 +1512,17 @@ function esc(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function gradeClass(g) {
-  if (g == null) return 'gna';
-  return 'g' + Math.max(1, Math.min(5, Math.round(g)));
+// Single continuous red(1) -> yellow(3) -> green(5) color scale shared by the
+// browse-table pills and the fund-detail grade circles, so the same numeric
+// score always reads as the same color everywhere on the site.
+function gradeHue(score) {
+  const t = Math.max(0, Math.min(1, (score - 1) / 4));
+  return t * 120; // 0=red, 60=yellow, 120=green
+}
+function gradeBgStyle(score) {
+  if (score == null) return 'background:#94a3b8;';
+  const hue = gradeHue(score);
+  return `background:linear-gradient(145deg, hsl(${hue.toFixed(0)},70%,45%), hsl(${hue.toFixed(0)},70%,32%));`;
 }
 function fmtAum(v)   { return v == null ? '—' : (v >= 1000 ? `$${(v/1000).toFixed(1)}B` : `$${v.toFixed(0)}M`); }
 function fmtErPct(v) { return v != null ? (v*100).toFixed(2)+'%' : '—'; }
@@ -1642,9 +1644,9 @@ function renderBrowseTable(rows) {
     return;
   }
   tbody.innerHTML = rows.map(r => {
-    const gradeCell = `<span class="grade-pill ${gradeClass(r.grade)}">${fmtGrade(r.grade)}</span>`;
-    const recentCell  = `<span class="grade-pill ${gradeClass(r.recent_grade)}">${fmtGrade(r.recent_grade)}</span>`;
-    const overallCell = `<span class="grade-pill ${gradeClass(r.overall_grade)}">${fmtGrade(r.overall_grade)}</span>`;
+    const gradeCell = `<span class="grade-pill" style="${gradeBgStyle(r.grade)}">${fmtGrade(r.grade)}</span>`;
+    const recentCell  = `<span class="grade-pill" style="${gradeBgStyle(r.recent_grade)}">${fmtGrade(r.recent_grade)}</span>`;
+    const overallCell = `<span class="grade-pill" style="${gradeBgStyle(r.overall_grade)}">${fmtGrade(r.overall_grade)}</span>`;
     const bmLabel = esc(r.single_etf_benchmark || r.benchmark) || '—';
     const bmWarn  = r.single_etf_benchmark_low_r2
       ? ` <span title="No single ETF explains this fund well (R² < 70%) — grade uses the replica portfolios more heavily." style="color:#c2410c;cursor:help;">&#9888;</span>`
@@ -1688,7 +1690,7 @@ function _onAnalysisShown(ticker, data) {
   const nameTxt = data.name || ticker;
   let html = `Showing <b>${esc(ticker)}</b> &mdash; ${esc(nameTxt)}`;
   if (row && row.grade != null) {
-    html += ` &nbsp;|&nbsp; Screen grade: <span class="grade-pill ${gradeClass(row.grade)}">${fmtGrade(row.grade)}</span>`;
+    html += ` &nbsp;|&nbsp; Screen grade: <span class="grade-pill" style="${gradeBgStyle(row.grade)}">${fmtGrade(row.grade)}</span>`;
     if (row.peer_percentile != null) html += ` &nbsp;(top ${100 - Math.round(row.peer_percentile)}% of ${esc(row.asset_class)} peers)`;
   }
   document.getElementById('browseSummaryText').innerHTML = html;

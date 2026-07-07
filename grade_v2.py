@@ -84,15 +84,12 @@ COMPARATOR_BLEND = {"bm": 0.25, "is3": 0.15, "oos3": 0.60}
 
 LOW_VOL_ANN_VOL_THRESHOLD = 0.04  # full-history annualised vol below this -> own grading band
 
-# Calibrated 2026-07-06: raw ret_score/vol_score/corr have very different
-# natural ranges across the universe (P5-P95 spread ~0.59/0.27/0.37
-# respectively), so these nominal weights don't map 1:1 to realized
-# influence -- ret_score's wider range means it dominates ties even at equal
-# weight, and vol_score's narrow range (usually >0.95, since the winning
-# candidate is nearly always already vol-matched) means it mostly only
-# matters in outlier cases. Return-matching intended to dominate, then
-# correlation, with volatility-match as the lightest (but still real) tiebreak.
-BM_WEIGHT_RET, BM_WEIGHT_VOL, BM_WEIGHT_CORR = 0.40, 0.20, 0.40
+# Calibrated 2026-07-07: dropped vol-match entirely -- it was penalizing
+# genuinely well-correlated candidates (e.g. PDBZX vs LQD, R^2=0.93) in favor
+# of a same-vol-but-lower-R^2 alternative (BND, R^2=0.88) purely because the
+# fund happened to run cooler than the higher-correlation ETF. Return-match
+# and correlation are weighted equally now.
+BM_WEIGHT_RET, BM_WEIGHT_VOL, BM_WEIGHT_CORR = 0.50, 0.00, 0.50
 BM_TIE_TOLERANCE = 0.01  # near-tie band (absolute composite-score gap) for the ER tie-break
 
 # ETFs whose config.py description has no embedded "x.xx%" expense ratio --
@@ -246,8 +243,8 @@ def _full_period_matrices(fund_s: pd.Series, etf_ret: pd.DataFrame):
 
 def select_best_single_etf(f_full: pd.Series, etf_full: pd.DataFrame) -> tuple[str | None, float | None]:
     """
-    Best single-ETF benchmark, scored on a composite of annual-return fit (40%),
-    volatility match (35%), and monthly correlation (25%) rather than raw R^2 --
+    Best single-ETF benchmark, scored on a composite of annual-return fit and
+    monthly correlation (50/50, see BM_WEIGHT_* above) rather than raw R^2 --
     see module docstring for why pure R^2 misleads for e.g. credit-risk bond
     funds. Ties within BM_TIE_TOLERANCE go to the lowest-expense-ratio candidate.
     """
