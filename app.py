@@ -23,6 +23,19 @@ from grade_v2 import select_best_single_etf, _greedy_topk, live_weighted_periods
 app = Flask(__name__, static_folder="static")
 ANALYSIS_CACHE_PATH = Path(__file__).parent / "analysis_cache.json"
 
+
+def _safe_round(v, ndigits=4):
+    """
+    round(float(v), n) but returns None for NaN/inf instead of a float that
+    still prints as the bare token `NaN`/`Infinity` -- valid to Python's
+    json.dumps (allow_nan=True by default) but NOT valid JSON per spec, so
+    the browser's strict response.json() throws a SyntaxError and the
+    frontend hangs on "Running analysis..." forever with no visible error
+    banner (only visible via the console).
+    """
+    v = float(v)
+    return None if not np.isfinite(v) else round(v, ndigits)
+
 # ── Module-level cache ────────────────────────────────────────────────────────
 _etf_returns: pd.DataFrame | None = None
 _etf_lock    = threading.Lock()
@@ -725,10 +738,10 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # Monthly OOS returns — used by frontend to compute rolling trailing returns
     monthly_oos = dict(
         dates      = [str(d.date()) for d in roll_fund.index],
-        fund       = [round(float(v), 4) for v in roll_fund.values],
-        replica    = [round(float(v), 4) for v in roll_rep.values],
-        replica_is = [round(float(v), 4) for v in replica_is_oos.values],
-        benchmark  = ([round(float(v), 4) for v in bm_oos_chart.values]
+        fund       = [_safe_round(v) for v in roll_fund.values],
+        replica    = [_safe_round(v) for v in roll_rep.values],
+        replica_is = [_safe_round(v) for v in replica_is_oos.values],
+        benchmark  = ([_safe_round(v) for v in bm_oos_chart.values]
                       if bm_oos_chart is not None else None),
         benchmark_ticker = bm_label_chart,
     )
@@ -748,10 +761,10 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
 
     cumulative_full = dict(
         dates       = [str(d.date()) for d in fund_ret.index],
-        fund        = [round(float(v), 4) for v in cum_fund_full.values],
-        replica_is  = [round(float(v), 4) for v in cum_is_full.values],
-        replica_oos = [None if pd.isna(v) else round(float(v), 4) for v in rep_oos_full.values],
-        benchmark   = ([round(float(v), 4) for v in cum_bmadj_full.values]
+        fund        = [_safe_round(v) for v in cum_fund_full.values],
+        replica_is  = [_safe_round(v) for v in cum_is_full.values],
+        replica_oos = [_safe_round(v) for v in rep_oos_full.values],
+        benchmark   = ([_safe_round(v) for v in cum_bmadj_full.values]
                        if cum_bmadj_full is not None else None),
         benchmark_ticker = bm_label_chart,
         oos_start   = str(oos_start_date.date()),
@@ -761,11 +774,11 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     if roll_wgt_df is not None and not roll_wgt_df.empty:
         avg_w    = roll_wgt_df.mean()
         sig_etfs = avg_w[avg_w > 0.02].sort_values(ascending=False).index.tolist()[:12]
-        wgt_series = {e: [round(float(v), 4) for v in roll_wgt_df[e].values]
+        wgt_series = {e: [_safe_round(v) for v in roll_wgt_df[e].values]
                       for e in sig_etfs}
         # Residual "Other" so the stacked chart always sums to 100 %
         sig_sum = roll_wgt_df[sig_etfs].values.sum(axis=1)
-        wgt_series["Other"] = [round(float(max(0.0, 1.0 - v)), 4) for v in sig_sum]
+        wgt_series["Other"] = [_safe_round(max(0.0, v)) for v in (1.0 - sig_sum)]
         rolling_weights = dict(
             dates  = [str(d.date()) for d in roll_wgt_df.index],
             etfs   = sig_etfs + ["Other"],
@@ -795,10 +808,10 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
         rolling_weights = rolling_weights,
         cumulative = dict(
             dates      = [str(d.date()) for d in cum_fund.index],
-            fund       = [round(float(v), 4) for v in cum_fund.values],
-            replica    = [round(float(v), 4) for v in cum_rep.values],
-            replica_is = [round(float(v), 4) for v in cum_is_oos.values],
-            benchmark  = ([round(float(v), 4)
+            fund       = [_safe_round(v) for v in cum_fund.values],
+            replica    = [_safe_round(v) for v in cum_rep.values],
+            replica_is = [_safe_round(v) for v in cum_is_oos.values],
+            benchmark  = ([_safe_round(v)
                            for v in (1 + bm_oos_chart).cumprod().values]
                           if bm_oos_chart is not None else None),
             benchmark_ticker = bm_label_chart,
