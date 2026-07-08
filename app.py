@@ -470,23 +470,28 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # different "best" ETF than the batch grade actually used. The selected
     # tickers are then applied to the existing align()-based etf_full below,
     # so the actual fit/chart data keeps its original row alignment.
+    # Single-benchmark selection uses the fund's full raw series against the
+    # full ETF table so each candidate is scored on its own max overlap with
+    # the fund (see select_best_single_etf docstring) -- NOT the pre-
+    # intersected _full_period_matrices() output, which truncates every
+    # fund's window to whichever ETF (e.g. ARKF, 2019) started trading most
+    # recently among all 85 candidates.
+    if not bm_override:
+        _cat_bm, _ = select_best_single_etf(fund_raw.dropna(), etf_ret)
+        _cat_bm = _cat_bm or ""
+    else:
+        _cat_bm = ""
+
+    # The top-3 replica IS a joint multi-ETF regression, so it still needs a
+    # common window across whichever ETFs end up chosen -- that's what
+    # _full_period_matrices is for here.
     _gv2 = _full_period_matrices(fund_raw.dropna(), etf_ret)
     _top3_tickers: list[str] | None = None
     if _gv2 is not None:
         _f_full_gv2, _etf_full_gv2 = _gv2
-        if not bm_override:
-            _cat_bm, _ = select_best_single_etf(_f_full_gv2, _etf_full_gv2)
-            _cat_bm = _cat_bm or ""
-        else:
-            _cat_bm = ""
         _top3_gv2 = _greedy_topk(_f_full_gv2.values, _etf_full_gv2.values, 3)
         if _top3_gv2 is not None:
             _top3_tickers = [_etf_full_gv2.columns[i] for i in _top3_gv2[0]]
-    elif not bm_override:
-        _cat_bm, _ = select_best_single_etf(fund_ret, etf_full)
-        _cat_bm = _cat_bm or ""
-    else:
-        _cat_bm = ""
 
     # Restrict the displayed replica to the SAME top-3 ETFs (greedy selection,
     # full history) used for the IS/OOS replica components of the grade --

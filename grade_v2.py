@@ -89,8 +89,21 @@ LOW_VOL_ANN_VOL_THRESHOLD = 0.04  # full-history annualised vol below this -> ow
 # of a same-vol-but-lower-R^2 alternative (BND, R^2=0.88) purely because the
 # fund happened to run cooler than the higher-correlation ETF. Return-match
 # and correlation are weighted equally now.
-BM_WEIGHT_RET, BM_WEIGHT_VOL, BM_WEIGHT_CORR = 0.50, 0.00, 0.50
+BM_WEIGHT_RET, BM_WEIGHT_CORR = 0.50, 0.50
 BM_TIE_TOLERANCE = 0.01  # near-tie band (absolute composite-score gap) for the ER tie-break
+
+# Calibrated 2026-07-07: the return-fit term switched from annual-return RMSE
+# to a buy-and-hold framing -- does a $1 investment in the fund and in the
+# candidate ETF end up in the same place, not just "do their calendar-year
+# returns look similar." Annual RMSE let a short-window, high-correlation
+# candidate (VCSH, overlap since 2009) beat a longer-window candidate (LQD,
+# overlap since 2005) purely because VCSH's available window happened to have
+# tighter year-to-year matches -- an artifact of window length, not fit
+# quality. BM_PATH_GAP_K is a small penalty so a candidate that drifts far
+# from the fund mid-window before coincidentally reconverging at the very end
+# (a "lucky endpoint") scores worse than one that tracks consistently
+# throughout, even if their terminal gaps are identical.
+BM_PATH_GAP_K = 1.0
 
 # ETFs whose config.py description has no embedded "x.xx%" expense ratio --
 # well-known published figures, filled in manually.
@@ -241,33 +254,57 @@ def _full_period_matrices(fund_s: pd.Series, etf_ret: pd.DataFrame):
 
 # ── Benchmark selection: composite score + ER tie-break ─────────────────────
 
-def select_best_single_etf(f_full: pd.Series, etf_full: pd.DataFrame) -> tuple[str | None, float | None]:
+BM_SCORING_WINDOW_MONTHS = 120  # cap every candidate to the same trailing window (10y)
+
+
+def select_best_single_etf(fund_s: pd.Series, etf_ret: pd.DataFrame) -> tuple[str | None, float | None]:
     """
-    Best single-ETF benchmark, scored on a composite of annual-return fit and
-    monthly correlation (50/50, see BM_WEIGHT_* above) rather than raw R^2 --
-    see module docstring for why pure R^2 misleads for e.g. credit-risk bond
-    funds. Ties within BM_TIE_TOLERANCE go to the lowest-expense-ratio candidate.
+    Best single-ETF benchmark, scored on a composite of buy-and-hold return
+    fit and monthly correlation (50/50, see BM_WEIGHT_* above) rather than
+    raw R^2 -- see module docstring for why pure R^2 misleads for e.g.
+    credit-risk bond funds. Ties within BM_TIE_TOLERANCE go to the lowest-
+    expense-ratio candidate.
+
+    Each candidate ETF is scored on its OWN overlap with the fund, capped to
+    the most recent BM_SCORING_WINDOW_MONTHS -- not a single window shared
+    across every candidate (which truncates every fund's window to whatever
+    ETF started trading most recently, e.g. ARKF in 2019) and not each
+    candidate's full uncapped history either (which let a short-window,
+    high-correlation-by-luck candidate outscore a longer-window candidate
+    with a slightly noisier but far more historically-supported fit).
+
+    The return-fit term (`adj_ret_score`) is a buy-and-hold framing: does $1
+    in the fund and $1 in the ETF end up in the same place, not just "do
+    calendar-year returns look similar." It combines the terminal annualised
+    gap between the two cumulative-return paths with a small penalty
+    (BM_PATH_GAP_K) for how far the paths drifted apart along the way, so a
+    candidate that reconverges at the very end after wandering far off
+    mid-window scores worse than one that tracked consistently throughout.
     """
-    fund_vol = float(f_full.std())
-    ann_fund = _ann_returns_by_year(f_full)
+    fund_s = fund_s.dropna()
     scores: dict[str, float] = {}
-    for t in etf_full.columns:
-        etf_s = etf_full[t]
-        ann_etf = _ann_returns_by_year(etf_s)
-        common_years = ann_fund.index.intersection(ann_etf.index)
-        if len(common_years) < 2:
+    windows: dict[str, tuple[pd.Series, pd.Series]] = {}
+    for t in etf_ret.columns:
+        etf_s = etf_ret[t].dropna()
+        common_idx = fund_s.index.intersection(etf_s.index)
+        if len(common_idx) < MIN_MONTHS_RBSA:
             continue
-        rmse = float(np.sqrt(np.mean(
-            (ann_fund.reindex(common_years).values - ann_etf.reindex(common_years).values) ** 2)))
-        ret_score = float(np.exp(-10.0 * rmse))
+        if len(common_idx) > BM_SCORING_WINDOW_MONTHS:
+            common_idx = common_idx[-BM_SCORING_WINDOW_MONTHS:]
+        f_c = fund_s.reindex(common_idx)
+        e_c = etf_s.reindex(common_idx)
+        n = len(f_c)
 
-        etf_vol = float(etf_s.std())
-        vol_ratio = etf_vol / fund_vol if fund_vol > 0 else 1.0
-        vol_score = float(np.exp(-5.0 * (np.log(vol_ratio)) ** 2)) if vol_ratio > 0 else 0.0
+        cum_f = (1 + f_c).cumprod()
+        cum_e = (1 + e_c).cumprod()
+        term_gap = float((cum_f.iloc[-1] / cum_e.iloc[-1]) ** (12 / n) - 1)
+        mean_path_gap = float((cum_f / cum_f.iloc[0] - cum_e / cum_e.iloc[0]).abs().mean())
+        adj_ret_score = float(np.exp(-10.0 * abs(term_gap) - BM_PATH_GAP_K * mean_path_gap))
 
-        corr = float(np.corrcoef(f_full.values, etf_s.values)[0, 1])
+        corr = float(np.corrcoef(f_c.values, e_c.values)[0, 1])
 
-        scores[t] = BM_WEIGHT_RET * ret_score + BM_WEIGHT_VOL * vol_score + BM_WEIGHT_CORR * corr
+        scores[t] = BM_WEIGHT_RET * adj_ret_score + BM_WEIGHT_CORR * corr
+        windows[t] = (f_c, e_c)
 
     if not scores:
         return None, None
@@ -278,7 +315,8 @@ def select_best_single_etf(f_full: pd.Series, etf_full: pd.DataFrame) -> tuple[s
     if near_tied:
         best_t = min(near_tied, key=lambda t: ER_MAP[t])
 
-    r2 = _r2_of(f_full.values, etf_full[best_t].values)
+    f_c, e_c = windows[best_t]
+    r2 = _r2_of(f_c.values, e_c.values)
     return best_t, r2
 
 
@@ -508,7 +546,11 @@ def run(con: duckdb.DuckDBPyConnection) -> None:
         f_full, etf_full = m
         fund_vol_map[ticker] = float(f_full.std() * np.sqrt(12))
 
-        bm_t, bm_r2 = select_best_single_etf(f_full, etf_full)
+        # Full raw fund series + full ETF table (not the pre-intersected
+        # f_full/etf_full above) so each candidate ETF is scored on its own
+        # max overlap with the fund, not truncated to the latest-inception
+        # ETF among all 85 (see select_best_single_etf docstring).
+        bm_t, bm_r2 = select_best_single_etf(fund_s, etf_ret)
         if bm_t is not None:
             bm_ticker_map[ticker] = bm_t
             bm_r2_map[ticker] = bm_r2
