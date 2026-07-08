@@ -247,6 +247,23 @@ def _live_score_from_period(period: dict | None) -> float | None:
     return max(1.0, min(5.0, score))
 
 
+_BOND_CATEGORY_KEYWORDS = ("bond", "income", "fixed", "muni", "treasury", "credit")
+
+
+def _infer_asset_class(category: str | None) -> str:
+    """
+    Fallback asset_class for tickers outside fund_universe.duckdb (e.g. the
+    curated cfg.ACTIVE_MUTUAL_FUNDS list), which has a granular Morningstar-
+    style category string (e.g. "High Yield Bond") rather than the coarse
+    asset_class column select_best_single_etf's asset-class-aware weighting
+    expects. Defaults to "Equity" (the safer, correlation-dominant weighting)
+    when the category is missing or doesn't look bond-like.
+    """
+    if category and any(kw in category.lower() for kw in _BOND_CATEGORY_KEYWORDS):
+        return "Fixed Income"
+    return "Equity"
+
+
 def _etf_name(ticker: str) -> str:
     """Plain-English name for an ETF, e.g. 'BND' -> 'Total US Bond' (strips
     the '(Provider, ER%)' suffix from the config.py description)."""
@@ -445,6 +462,12 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     else:
         meta = {"name": ticker, "er": None, "stars": None, "category": ""}
 
+    # fund_universe.duckdb's asset_class column (Equity/Fixed Income/Allocation/
+    # Alternative, no nulls) is the reliable input for select_best_single_etf's
+    # asset-class-aware weighting; tickers outside that DB fall back to
+    # keyword-matching their (granular) category string.
+    asset_class = _umeta.get("asset_class") if _umeta else _infer_asset_class(meta.get("category"))
+
     # Load fund returns
     if ticker in cfg.ACTIVE_ETFS:
         raw      = load_etf_returns([ticker], start=cfg.DEFAULT_START, end=cfg.DEFAULT_END)
@@ -477,7 +500,7 @@ def _run_analysis(ticker: str, bm_override: str = "") -> dict:
     # fund's window to whichever ETF (e.g. ARKF, 2019) started trading most
     # recently among all 85 candidates.
     if not bm_override:
-        _cat_bm, _ = select_best_single_etf(fund_raw.dropna(), etf_ret)
+        _cat_bm, _ = select_best_single_etf(fund_raw.dropna(), etf_ret, asset_class)
         _cat_bm = _cat_bm or ""
     else:
         _cat_bm = ""

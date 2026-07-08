@@ -87,9 +87,28 @@ LOW_VOL_ANN_VOL_THRESHOLD = 0.04  # full-history annualised vol below this -> ow
 # Calibrated 2026-07-07: dropped vol-match entirely -- it was penalizing
 # genuinely well-correlated candidates (e.g. PDBZX vs LQD, R^2=0.93) in favor
 # of a same-vol-but-lower-R^2 alternative (BND, R^2=0.88) purely because the
-# fund happened to run cooler than the higher-correlation ETF. Return-match
-# and correlation are weighted equally now.
-BM_WEIGHT_RET, BM_WEIGHT_CORR = 0.50, 0.50
+# fund happened to run cooler than the higher-correlation ETF.
+#
+# Calibrated 2026-07-07 (later same day): return-match and correlation are NOT
+# weighted equally for equities -- return-matching (does the fund end up in
+# the same place as the candidate) rewards whichever candidate a fund happens
+# to have underperformed or tied least, which is backwards when the fund has
+# genuine skill. Case found: DODGX beats every broad value ETF (VTV/IWD/IJJ)
+# by 0.5-2.5%/yr, so return-matching picked XLF -- a candidate DODGX hasn't
+# beaten -- over VTV/IWD, which actually correlate MORE tightly (0.96 vs
+# XLF's 0.93) and are the more natural style peers. That silently erases a
+# real outperformance signal by picking the peer the fund looks least
+# distinguished against, rather than the peer that best describes its style.
+# Correlation describes what a fund invests in; return-match should not be
+# allowed to override that for equities, where 85 candidates gives ample
+# opportunity for a coincidental return match. Fixed income funds are lower-
+# dispersion and more homogeneous (a bond fund's simplest and most useful
+# question IS often "how far off is it, in return terms"), so return-match
+# still carries real weight there.
+BM_WEIGHTS_BY_ASSET_CLASS: dict[str, tuple[float, float]] = {
+    "Fixed Income": (0.50, 0.50),   # (BM_WEIGHT_RET, BM_WEIGHT_CORR)
+    "_default":     (0.20, 0.80),   # Equity, Allocation, Alternative, unknown
+}
 BM_TIE_TOLERANCE = 0.01  # near-tie band (absolute composite-score gap) for the ER tie-break
 
 # Calibrated 2026-07-07: the return-fit term switched from annual-return RMSE
@@ -257,13 +276,23 @@ def _full_period_matrices(fund_s: pd.Series, etf_ret: pd.DataFrame):
 BM_SCORING_WINDOW_MONTHS = 120  # cap every candidate to the same trailing window (10y)
 
 
-def select_best_single_etf(fund_s: pd.Series, etf_ret: pd.DataFrame) -> tuple[str | None, float | None]:
+def select_best_single_etf(
+    fund_s: pd.Series, etf_ret: pd.DataFrame, asset_class: str | None = None,
+) -> tuple[str | None, float | None]:
     """
     Best single-ETF benchmark, scored on a composite of buy-and-hold return
-    fit and monthly correlation (50/50, see BM_WEIGHT_* above) rather than
-    raw R^2 -- see module docstring for why pure R^2 misleads for e.g.
-    credit-risk bond funds. Ties within BM_TIE_TOLERANCE go to the lowest-
-    expense-ratio candidate.
+    fit and monthly correlation rather than raw R^2 -- see module docstring
+    for why pure R^2 misleads for e.g. credit-risk bond funds. Ties within
+    BM_TIE_TOLERANCE go to the lowest-expense-ratio candidate.
+
+    `asset_class` (e.g. "Equity", "Fixed Income", from fund_universe's
+    asset_class column) selects the return/correlation weight split via
+    BM_WEIGHTS_BY_ASSET_CLASS -- equities weight correlation far more heavily
+    (style match) since return-matching alone can pick whichever candidate a
+    genuinely skilled fund happens to have underperformed or tied least,
+    silently erasing real outperformance vs its natural peers (see module
+    docstring). Unrecognized/missing asset_class falls back to the equity
+    weighting (correlation-dominant), the safer default.
 
     Each candidate ETF is scored on its OWN overlap with the fund, capped to
     the most recent BM_SCORING_WINDOW_MONTHS -- not a single window shared
@@ -281,6 +310,9 @@ def select_best_single_etf(fund_s: pd.Series, etf_ret: pd.DataFrame) -> tuple[st
     candidate that reconverges at the very end after wandering far off
     mid-window scores worse than one that tracked consistently throughout.
     """
+    weight_ret, weight_corr = BM_WEIGHTS_BY_ASSET_CLASS.get(
+        asset_class or "_default", BM_WEIGHTS_BY_ASSET_CLASS["_default"])
+
     fund_s = fund_s.dropna()
     scores: dict[str, float] = {}
     windows: dict[str, tuple[pd.Series, pd.Series]] = {}
@@ -303,7 +335,7 @@ def select_best_single_etf(fund_s: pd.Series, etf_ret: pd.DataFrame) -> tuple[st
 
         corr = float(np.corrcoef(f_c.values, e_c.values)[0, 1])
 
-        scores[t] = BM_WEIGHT_RET * adj_ret_score + BM_WEIGHT_CORR * corr
+        scores[t] = weight_ret * adj_ret_score + weight_corr * corr
         windows[t] = (f_c, e_c)
 
     if not scores:
@@ -527,6 +559,8 @@ def run(con: duckdb.DuckDBPyConnection) -> None:
     tickers = con.execute("""
         SELECT DISTINCT ticker FROM batch_summary WHERE grade IS NOT NULL
     """).df()["ticker"].tolist()
+    asset_class_map: dict[str, str] = dict(
+        con.execute("SELECT ticker, asset_class FROM fund_universe").fetchall())
     print(f"grade_v2: {len(tickers)} funds, {etf_ret.shape[1]} ETFs")
 
     t0 = time.time()
@@ -550,7 +584,7 @@ def run(con: duckdb.DuckDBPyConnection) -> None:
         # f_full/etf_full above) so each candidate ETF is scored on its own
         # max overlap with the fund, not truncated to the latest-inception
         # ETF among all 85 (see select_best_single_etf docstring).
-        bm_t, bm_r2 = select_best_single_etf(fund_s, etf_ret)
+        bm_t, bm_r2 = select_best_single_etf(fund_s, etf_ret, asset_class_map.get(ticker))
         if bm_t is not None:
             bm_ticker_map[ticker] = bm_t
             bm_r2_map[ticker] = bm_r2
