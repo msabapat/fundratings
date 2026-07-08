@@ -206,7 +206,16 @@ ACTIVE_MUTUAL_FUNDS: dict[str, dict] = {
 
 # ── Analysis parameters ───────────────────────────────────────────────────────
 DEFAULT_START       = "2005-01-01"   # earliest common start across mutual funds
-DEFAULT_END         = "2025-12-31"
+# Deliberately a far-future placeholder, not "today" -- a hardcoded past date
+# here silently truncates every yfinance-fallback fund's data (any ticker not
+# in fund_universe.duckdb, e.g. DODGX) to that date, which is exactly what
+# happened when this was "2025-12-31": DODGX's yfinance series went stale by
+# ~7 months, giving it a different trailing-10y benchmark-scoring window than
+# the DB-backed funds and landing on a different (wrong) benchmark. Pandas
+# .loc slicing and yfinance's date range both silently clip to whatever data
+# actually exists, so a future end date is always safe and never needs
+# manual upkeep.
+DEFAULT_END         = "2035-12-31"
 TRAIN_MONTHS        = 36             # rolling window training length
 REBAL_MONTHS        = 12             # rolling rebalance frequency (annual; change back to 3 for quarterly)
 OOS_START           = "2015-01-01"   # IS/OOS split date
